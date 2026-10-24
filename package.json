@@ -1,0 +1,17 @@
+{
+  "name": "sdwan-manager",
+  "version": "1.0.0",
+  "description": "Painel SD-WAN e Monitor de Links MikroTik Multi-Tenant",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

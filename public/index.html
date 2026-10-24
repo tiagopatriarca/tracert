@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TRACERT+ > SD-WAN & Links Monitor</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+</head>
+<body>
+
+  <!-- TELA DE LOGIN -->
+  <div id="login-screen" class="login-wrapper">
+    <div class="login-card">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div class="logo-badge" style="display: inline-block; font-size: 16px; padding: 8px 16px;">TRACERT+</div>
+        <h2 style="font-size: 20px; font-weight: 700; margin-top: 12px; color: #0f172a;">Acesso ao Painel SD-WAN</h2>
+        <p style="font-size: 13px; color: #64748b; margin-top: 4px;">Gerenciamento Multi-Tenant de MikroTiks</p>
+      </div>
+
+      <div id="login-alert" style="display: none; background: #fee2e2; color: #b91c1c; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 15px;"></div>
+
+      <form id="form-login" onsubmit="realizarLogin(event)">
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">Usuário</label>
+          <input type="text" id="login-username" required class="input-text" placeholder="admin" value="admin">
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">Senha</label>
+          <input type="password" id="login-password" required class="input-text" placeholder="••••••••" value="admin123">
+        </div>
+        <button type="submit" class="btn-primary" style="width: 100%; padding: 10px; font-size: 14px;">Entrar no Sistema</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- APLICAÇÃO PRINCIPAL -->
+  <div id="app-container" style="display: flex; width: 100%; height: 100%;">
+    <!-- Barra Lateral -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-badge">TRACERT+</div>
+        <div style="font-weight: 700; font-size: 15px;">SD-WAN Pro</div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-item active" onclick="switchView('sdwan')">
+          <span>🌐</span> SD-Wan
+        </div>
+        <div class="nav-item" onclick="switchView('links')">
+          <span>📶</span> Status dos Links
+        </div>
+        <div class="nav-item" onclick="switchView('reports')">
+          <span>📊</span> Relatórios & SLA (PDF)
+        </div>
+        <div class="nav-item" id="nav-admin" onclick="switchView('admin')">
+          <span>⚙️</span> Administração & WhatsApp
+        </div>
+      </nav>
+
+      <div style="padding: 16px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between;">
+        <div>
+          <div id="user-display-name" style="font-size: 13px; font-weight: 700; color: #1e293b;">Admin</div>
+          <div id="timeout-display" style="font-size: 11px; color: #64748b;">Inatividade: 15m</div>
+        </div>
+        <button onclick="fazerLogout()" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 16px;" title="Sair">🚪</button>
+      </div>
+    </aside>
+
+    <!-- Área de Conteúdo -->
+    <div class="main-wrapper">
+      <header class="top-header">
+        <div class="breadcrumbs">
+          TRACERT+ &gt; <span id="breadcrumb-current">SD-WAN</span>
+        </div>
+
+        <div class="tenant-selector">
+          <label style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">Cliente:</label>
+          <select id="client-select" class="select-box" onchange="onClientChange()"></select>
+
+          <label style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">MikroTik:</label>
+          <select id="router-select" class="select-box" onchange="onRouterChange()"></select>
+        </div>
+      </header>
+
+      <!-- VIEW 1: SD-WAN -->
+      <main id="view-sdwan" class="content-body">
+        <div class="page-title-row">
+          <h1 class="page-title">SD-Wan</h1>
+          <button class="btn-primary" onclick="alertModalNovoDestino()">+ Adicionar Destino</button>
+        </div>
+        <div id="sdwan-cards-container" class="sdwan-grid"></div>
+      </main>
+
+      <!-- VIEW 2: Status dos Links WAN -->
+      <main id="view-links" class="content-body" style="display: none;">
+        <div class="page-title-row">
+          <h1 class="page-title">Status dos Links WAN</h1>
+          <span style="font-size: 13px; color: var(--text-secondary);">Telemetria em tempo real</span>
+        </div>
+        <div id="links-cards-container" class="links-status-grid"></div>
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+          <h3 style="font-size: 16px; margin-bottom: 15px; color: #1e293b;">Eventos Recentes dos Links</h3>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="links-events-table">
+            <thead>
+              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                <th style="padding: 10px;">Data/Hora</th>
+                <th style="padding: 10px;">Link</th>
+                <th style="padding: 10px;">Novo Status</th>
+                <th style="padding: 10px;">Score de Pings</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </main>
+
+      <!-- VIEW 3: Relatórios e SLA -->
+      <main id="view-reports" class="content-body" style="display: none;">
+        <div class="page-title-row">
+          <h1 class="page-title">Relatórios e Auditoria</h1>
+          <button class="btn-primary" onclick="exportarRelatorioPDF()">📥 Exportar para PDF</button>
+        </div>
+
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 18px; margin-bottom: 20px; display: flex; gap: 16px; align-items: flex-end;">
+          <div>
+            <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Data Inicial</label>
+            <input type="date" id="report-start-date" class="select-box">
+          </div>
+          <div>
+            <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Data Final</label>
+            <input type="date" id="report-end-date" class="select-box">
+          </div>
+          <div>
+            <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Tipo de Relatório</label>
+            <select id="report-type" class="select-box" onchange="carregarRelatorioSelecionado()">
+              <option value="availability">Disponibilidade dos Links (SLA / Quedas)</option>
+              <option value="sdwan">Histórico de Trocas do SD-WAN</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="carregarRelatorioSelecionado()">Filtrar</button>
+        </div>
+
+        <div id="printable-report-area" style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 24px;">
+          <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 20px;">
+            <div>
+              <h2 id="report-doc-title" style="font-size: 18px; color: #0f172a;">Relatório de Disponibilidade dos Links WAN</h2>
+              <div id="report-doc-subtitle" style="font-size: 12.5px; color: #64748b; margin-top: 4px;">TRACERT+ | TI Plus</div>
+            </div>
+            <div style="text-align: right; font-size: 12px; color: #94a3b8;">
+              Gerado em: <span id="report-doc-timestamp"></span>
+            </div>
+          </div>
+          <div id="report-content-body"></div>
+        </div>
+      </main>
+
+      <!-- VIEW 4: Administração -->
+      <main id="view-admin" class="content-body" style="display: none;">
+        <div class="page-title-row">
+          <h1 class="page-title">Área de Administração</h1>
+        </div>
+
+        <!-- Evolution API Config -->
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+          <h3 style="font-size: 16px; margin-bottom: 8px; color: #1e293b;">Integração com Evolution API (WhatsApp)</h3>
+          <p style="font-size: 13px; color: #64748b; margin-bottom: 16px;">
+            Envie alertas instantâneos de queda de link, trocas de rota no SD-WAN e perda de comunicação do roteador direto no WhatsApp.
+          </p>
+
+          <form id="form-evolution" onsubmit="salvarEvolution(event)" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 16px; align-items: flex-end;">
+            <div>
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Base URL da Evolution API</label>
+              <input type="text" id="evo-base-url" class="input-text" placeholder="https://api.whatsapp.suaempresa.com" required>
+            </div>
+            <div>
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">API Key (Global ou da Instância)</label>
+              <input type="password" id="evo-api-key" class="input-text" placeholder="Sua Chave de API" required>
+            </div>
+            <div>
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Nome da Instância</label>
+              <input type="text" id="evo-instance" class="input-text" placeholder="instancia-tiplus" required>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; height: 38px;">
+              <label style="font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+                <input type="checkbox" id="evo-enabled"> Ativar Envio
+              </label>
+              <button type="submit" class="btn-primary">Salvar</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Grupos com Edição e Exclusão -->
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div>
+              <h3 style="font-size: 16px; color: #1e293b;">Grupos de Acesso & Notificações</h3>
+              <p style="font-size: 13px; color: #64748b;">Associe empresas, MikroTiks específicos e o número de WhatsApp para receber alertas.</p>
+            </div>
+            <button class="btn-primary" onclick="abrirModalGrupo()">+ Novo Grupo</button>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="groups-table">
+            <thead>
+              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                <th style="padding: 10px;">Nome do Grupo</th>
+                <th style="padding: 10px;">WhatsApp (+55)</th>
+                <th style="padding: 10px;">Notificações Ativas</th>
+                <th style="padding: 10px;">MikroTiks Vinculados</th>
+                <th style="padding: 10px; text-align: right;">Ações</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <!-- Usuários com Edição e Exclusão -->
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div>
+              <h3 style="font-size: 16px; color: #1e293b;">Usuários do Painel</h3>
+              <p style="font-size: 13px; color: #64748b;">Gerencie quem pode acessar e o tempo de inatividade para logout automático.</p>
+            </div>
+            <button class="btn-primary" onclick="abrirModalUsuario()">+ Novo Usuário</button>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="users-table">
+            <thead>
+              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                <th style="padding: 10px;">Nome</th>
+                <th style="padding: 10px;">Login</th>
+                <th style="padding: 10px;">Função</th>
+                <th style="padding: 10px;">Grupo</th>
+                <th style="padding: 10px;">Timeout Inatividade</th>
+                <th style="padding: 10px; text-align: right;">Ações</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- MODAL: Grupo de Acesso (Criação e Edição) -->
+  <div id="modal-grupo" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 550px;">
+      <div class="dialog-header">
+        <h2 id="modal-grupo-title" class="dialog-title">Cadastrar Grupo de Acesso</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <form id="form-novo-grupo" onsubmit="salvarGrupo(event)">
+          <input type="hidden" id="grupo-id" value="">
+          <div style="margin-bottom: 14px;">
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">Nome do Grupo</label>
+            <input type="text" id="grupo-nome" required class="input-text" placeholder="Ex: Suporte ARO Marketing">
+          </div>
+
+          <div style="margin-bottom: 14px;">
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">WhatsApp para Notificações</label>
+            <div style="display: flex;">
+              <span style="background: #e2e8f0; border: 1px solid var(--border-color); border-right: none; padding: 8px 12px; font-weight: 700; border-radius: 6px 0 0 6px; font-size: 13px; color: #475569;">+55</span>
+              <input type="text" id="grupo-whatsapp" required class="input-text" style="border-radius: 0 6px 6px 0;" placeholder="85999999999" maxlength="11">
+            </div>
+            <span style="font-size: 11px; color: #64748b;">Digite o DDD e o número (ex: 85999998888)</span>
+          </div>
+
+          <div style="margin-bottom: 16px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="font-weight: 600; font-size: 12.5px; margin-bottom: 8px;">Notificações para enviar neste número:</div>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px;">
+              <input type="checkbox" id="notify-link-down" checked> Quando um dos links WAN cair (ou voltar)
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px;">
+              <input type="checkbox" id="notify-sdwan" checked> Quando houver troca de rota no SD-WAN
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
+              <input type="checkbox" id="notify-router-offline" checked> Quando o MikroTik parar de responder a API (+5 min)
+            </label>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px;">MikroTiks com Acesso Permitido:</label>
+            <div id="grupo-routers-checklist" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 8px; border-radius: 6px;"></div>
+          </div>
+
+          <button type="submit" class="btn-primary" style="width: 100%;">Salvar Grupo</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Usuário (Criação e Edição) -->
+  <div id="modal-usuario" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 500px;">
+      <div class="dialog-header">
+        <h2 id="modal-user-title" class="dialog-title">Cadastrar Novo Usuário</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <form id="form-novo-usuario" onsubmit="salvarUsuario(event)">
+          <input type="hidden" id="user-id" value="">
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Nome Completo</label>
+            <input type="text" id="user-nome" required class="input-text">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Login de Usuário</label>
+            <input type="text" id="user-login" required class="input-text">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Senha <span id="user-pw-hint" style="color:#64748b; font-weight:normal;"></span></label>
+            <input type="password" id="user-senha" class="input-text">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Grupo de Acesso</label>
+            <select id="user-group" class="select-box" style="width: 100%;"></select>
+          </div>
+          <div style="margin-bottom: 18px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Tempo de Inatividade para Logout (minutos)</label>
+            <input type="number" id="user-timeout" value="15" min="1" max="120" class="input-text">
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%;">Salvar Usuário</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAIS TIMELINE E GRÁFICOS -->
+  <div id="modal-timeline" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog">
+      <div class="dialog-header">
+        <h2 id="timeline-target-title" class="dialog-title">Email - Entrada</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div id="timeline-list-container" class="timeline-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-graficos" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog">
+      <div class="dialog-header">
+        <h2 id="grafico-target-title" class="dialog-title">Gráficos de Latência por Link</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          <h4 id="link1-title" style="margin-bottom: 10px; font-size: 15px; color: #1e293b;">ITS</h4>
+          <div style="height: 180px;"><canvas id="chart-link1"></canvas></div>
+        </div>
+        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+          <h4 id="link2-title" style="margin-bottom: 10px; font-size: 15px; color: #1e293b;">CLARO</h4>
+          <div style="height: 180px;"><canvas id="chart-link2"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
