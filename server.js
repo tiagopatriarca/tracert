@@ -19,9 +19,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ----------------------------------------------------------------------
-// MIDDLEWARE DE AUTENTICAÇÃO DO PAINEL
-// ----------------------------------------------------------------------
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '') || req.query.auth_token;
   if (!token) return res.status(401).json({ error: 'Não autenticado' });
@@ -36,7 +33,7 @@ function authMiddleware(req, res, next) {
 }
 
 // ----------------------------------------------------------------------
-// LOGIN & SESSÃO
+// LOGIN
 // ----------------------------------------------------------------------
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
@@ -67,14 +64,50 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // ----------------------------------------------------------------------
-// TELEMETRIA MIKROTIK (Autenticado via Token do Roteador)
+// TELEMETRIAS DO MIKROTIK (Autenticado via Token do Roteador)
 // ----------------------------------------------------------------------
 function getRouterByToken(token) {
   if (!token) return null;
   return db.prepare('SELECT * FROM routers WHERE token = ?').get(token);
 }
 
-// 1. Failover Link ON/OFF
+// 1. Telemetria de Hardware e Sistema (/system resource e /system routerboard)
+app.post('/api/telemetry/system', (req, res) => {
+  const token = req.query.token || req.body.token;
+  const router = getRouterByToken(token);
+  if (!router) return res.status(401).json({ error: 'Token inválido' });
+
+  const {
+    model, routerosVersion, firmwareVersion,
+    cpuModel, cpuCount, cpuLoad,
+    totalMemory, freeMemory, uptime, serialNumber
+  } = req.body;
+
+  db.prepare(`
+    UPDATE routers SET
+      model = COALESCE(?, model),
+      routeros_version = ?,
+      firmware_version = ?,
+      cpu_model = ?,
+      cpu_count = ?,
+      cpu_load = ?,
+      total_memory = ?,
+      free_memory = ?,
+      uptime = ?,
+      serial_number = ?,
+      last_seen = datetime('now')
+    WHERE id = ?
+  `).run(
+    model, routerosVersion, firmwareVersion,
+    cpuModel, cpuCount || 1, cpuLoad || 0,
+    totalMemory || 0, freeMemory || 0, uptime, serialNumber,
+    router.id
+  );
+
+  res.json({ success: true, router: router.name });
+});
+
+// 2. Failover Link ON/OFF
 app.post('/api/telemetry/failover', async (req, res) => {
   const token = req.query.token || req.body.token;
   const router = getRouterByToken(token);
@@ -105,7 +138,7 @@ app.post('/api/telemetry/failover', async (req, res) => {
 
     if (linkStatus === 'DOWN') {
       db.prepare("INSERT INTO link_outages (router_id, link_name, down_time) VALUES (?, ?, datetime('now'))").run(router.id, linkName);
-      const msg = `🚨 *ALERTA DE QUEDA DE LINK*\n\n📍 *Roteador:* ${router.name}\n🌐 *Link:* ${linkName}\n🔴 *Status:* DOWN\n⚠️ *Score de Pings:* ${pingScore}/8\n⏰ *Data/Hora:* ${new Date().toLocaleString('pt-BR')}`;
+      const msg = `🚨 *TRACERT+: QUEDA DE LINK*\n\n📍 *Roteador:* ${router.name}\n🌐 *Link:* ${linkName}\n🔴 *Status:* DOWN\n⚠️ *Score de Pings:* ${pingScore}/8\n⏰ *Data/Hora:* ${new Date().toLocaleString('pt-BR')}`;
       sendEvolutionWhatsapp('LINK_DOWN', router.id, msg);
     } else if (linkStatus === 'UP') {
       const lastOutage = db.prepare('SELECT id, down_time FROM link_outages WHERE router_id = ? AND link_name = ? AND up_time IS NULL ORDER BY id DESC LIMIT 1').get(router.id, linkName);
@@ -117,7 +150,7 @@ app.post('/api/telemetry/failover', async (req, res) => {
           WHERE id = ?
         `).run(lastOutage.id);
       }
-      const msg = `✅ *RETORNO DE LINK*\n\n📍 *Roteador:* ${router.name}\n🌐 *Link:* ${linkName}\n🟢 *Status:* UP (Normalizado)\n⏰ *Data/Hora:* ${new Date().toLocaleString('pt-BR')}`;
+      const msg = `✅ *TRACERT+: RETORNO DE LINK*\n\n📍 *Roteador:* ${router.name}\n🌐 *Link:* ${linkName}\n🟢 *Status:* UP (Normalizado)\n⏰ *Data/Hora:* ${new Date().toLocaleString('pt-BR')}`;
       sendEvolutionWhatsapp('LINK_DOWN', router.id, msg);
     }
   }
@@ -125,7 +158,7 @@ app.post('/api/telemetry/failover', async (req, res) => {
   res.json({ success: true, router: router.name, link: linkName, status: linkStatus });
 });
 
-// 2. SD-WAN Telemetria
+// 3. SD-WAN Telemetria
 app.post('/api/telemetry/sdwan', async (req, res) => {
   const token = req.query.token || req.body.token;
   const router = getRouterByToken(token);
@@ -192,7 +225,61 @@ app.post('/api/telemetry/sdwan', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------
-// ENDPOINTS DE CONSULTA DO DASHBOARD
+// PAINEL CENTRAL (DASHBOARD GERAL / HOME)
+// ----------------------------------------------------------------------
+app.get('/api/dashboard/overview', authMiddleware, (req, res) => {
+  // Retorna resumo geral para a tela inicial
+  let routerFilter = '';
+  let params = [];
+  if (req.user.role !== 'ADMIN') {
+    routerFilter = 'JOIN group_routers gr ON gr.router_id = r.id WHERE gr.group_id = ?';
+    params.push(req.user.groupId);
+  }
+
+  const totalRouters = db.prepare(`SELECT count(DISTINCT r.id) as count FROM routers r ${routerFilter}`).get(...params)?.count || 0;
+  
+  // Roteadores Online (last_seen < 5 minutos)
+  const onlineRouters = db.prepare(`
+    SELECT count(DISTINCT r.id) as count FROM routers r 
+    ${routerFilter ? routerFilter + ' AND ' : 'WHERE '} 
+    datetime(r.last_seen, '+5 minutes') >= datetime('now')
+  `).get(...params)?.count || 0;
+
+  // Links Atualmente OFFLINE
+  const linksDownQuery = `
+    SELECT ls.link_name, ls.last_changed, r.name as router_name, c.name as client_name
+    FROM link_statuses ls
+    JOIN routers r ON r.id = ls.router_id
+    JOIN clients c ON c.id = r.client_id
+    ${routerFilter ? 'JOIN group_routers gr ON gr.router_id = r.id WHERE gr.group_id = ? AND ' : 'WHERE '}
+    ls.status = 'DOWN'
+    ORDER BY ls.last_changed DESC
+  `;
+  const linksDown = db.prepare(linksDownQuery).all(...params);
+
+  // Últimos Eventos de Queda / Retorno
+  const recentEventsQuery = `
+    SELECT le.*, r.name as router_name, c.name as client_name
+    FROM link_events le
+    JOIN routers r ON r.id = le.router_id
+    JOIN clients c ON c.id = r.client_id
+    ${routerFilter ? 'JOIN group_routers gr ON gr.router_id = r.id WHERE gr.group_id = ?' : ''}
+    ORDER BY le.created_at DESC LIMIT 10
+  `;
+  const recentEvents = db.prepare(recentEventsQuery).all(...params);
+
+  res.json({
+    totalRouters,
+    onlineRouters,
+    offlineRouters: Math.max(0, totalRouters - onlineRouters),
+    totalLinksDown: linksDown.length,
+    linksDown,
+    recentEvents
+  });
+});
+
+// ----------------------------------------------------------------------
+// CRUD DE CLIENTES
 // ----------------------------------------------------------------------
 app.get('/api/clients', authMiddleware, (req, res) => {
   if (req.user.role === 'ADMIN') {
@@ -209,6 +296,27 @@ app.get('/api/clients', authMiddleware, (req, res) => {
   res.json(clients);
 });
 
+app.post('/api/clients', authMiddleware, (req, res) => {
+  const { name, description } = req.body;
+  if (!name) return res.status(400).json({ error: 'Nome é obrigatório' });
+  const result = db.prepare('INSERT INTO clients (name, description) VALUES (?, ?)').run(name, description || '');
+  res.json({ id: result.lastInsertRowid, name, description });
+});
+
+app.put('/api/clients/:id', authMiddleware, (req, res) => {
+  const { name, description } = req.body;
+  db.prepare('UPDATE clients SET name = ?, description = ? WHERE id = ?').run(name, description || '', req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/clients/:id', authMiddleware, (req, res) => {
+  db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// ----------------------------------------------------------------------
+// CRUD DE MIKROTIKS (ROUTERBOARDS)
+// ----------------------------------------------------------------------
 app.get('/api/routers', authMiddleware, (req, res) => {
   const clientId = req.query.clientId;
   let query = 'SELECT r.*, c.name as client_name FROM routers r JOIN clients c ON c.id = r.client_id';
@@ -232,6 +340,30 @@ app.get('/api/routers', authMiddleware, (req, res) => {
   res.json(db.prepare(query).all(...params));
 });
 
+app.post('/api/routers', authMiddleware, (req, res) => {
+  const { clientId, name, model } = req.body;
+  if (!clientId || !name) return res.status(400).json({ error: 'Cliente e Nome são obrigatórios' });
+
+  // Gera token amigável e único
+  const token = 'MK-' + Math.random().toString(36).substring(2, 7).toUpperCase() + '-' + Date.now().toString().slice(-4);
+  const result = db.prepare('INSERT INTO routers (client_id, name, token, model) VALUES (?, ?, ?, ?)').run(clientId, name, token, model || 'RouterOS');
+  res.json({ id: result.lastInsertRowid, clientId, name, token, model });
+});
+
+app.put('/api/routers/:id', authMiddleware, (req, res) => {
+  const { clientId, name, model } = req.body;
+  db.prepare('UPDATE routers SET client_id = ?, name = ?, model = ? WHERE id = ?').run(clientId, name, model, req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/routers/:id', authMiddleware, (req, res) => {
+  db.prepare('DELETE FROM routers WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// ----------------------------------------------------------------------
+// CRUD DE DESTINOS SD-WAN
+// ----------------------------------------------------------------------
 app.get('/api/routers/:id/sdwan', authMiddleware, (req, res) => {
   const routerId = req.params.id;
   const targets = db.prepare('SELECT * FROM sdwan_targets WHERE router_id = ? ORDER BY name ASC').all(routerId);
@@ -243,6 +375,27 @@ app.get('/api/routers/:id/sdwan', authMiddleware, (req, res) => {
   res.json(enriched);
 });
 
+// Criar destino SD-WAN pelo painel
+app.post('/api/routers/:id/sdwan', authMiddleware, (req, res) => {
+  const routerId = req.params.id;
+  const { name, address } = req.body;
+  if (!name || !address) return res.status(400).json({ error: 'Nome e Endereço são obrigatórios' });
+
+  const result = db.prepare(`
+    INSERT INTO sdwan_targets (router_id, name, address, active_link, metric_rtt, metric_loss, last_tested)
+    VALUES (?, ?, ?, 'Aguardando', 0, 0, datetime('now'))
+    ON CONFLICT(router_id, address) DO UPDATE SET name = excluded.name
+  `).run(routerId, name, address);
+
+  res.json({ id: result.lastInsertRowid, name, address });
+});
+
+app.delete('/api/sdwan/:targetId', authMiddleware, (req, res) => {
+  db.prepare('DELETE FROM sdwan_targets WHERE id = ?').run(req.params.targetId);
+  res.json({ success: true });
+});
+
+// Demais endpoints de timeline, métricas e links
 app.get('/api/sdwan/:targetId/timeline', authMiddleware, (req, res) => {
   const targetId = req.params.targetId;
   const target = db.prepare('SELECT * FROM sdwan_targets WHERE id = ?').get(targetId);
@@ -321,11 +474,7 @@ app.get('/api/reports/sdwan', authMiddleware, (req, res) => {
   res.json(history);
 });
 
-// ----------------------------------------------------------------------
-// ADMINISTRAÇÃO: CRUD COMPLETO DE GRUPOS E USUÁRIOS
-// ----------------------------------------------------------------------
-
-// 1. Grupos - Listar
+// Grupos CRUD
 app.get('/api/admin/groups', authMiddleware, (req, res) => {
   const groups = db.prepare('SELECT * FROM access_groups ORDER BY name ASC').all();
   const getRouters = db.prepare('SELECT router_id FROM group_routers WHERE group_id = ?');
@@ -336,7 +485,6 @@ app.get('/api/admin/groups', authMiddleware, (req, res) => {
   res.json(enriched);
 });
 
-// Grupos - Obter por ID para Edição
 app.get('/api/admin/groups/:id', authMiddleware, (req, res) => {
   const group = db.prepare('SELECT * FROM access_groups WHERE id = ?').get(req.params.id);
   if (!group) return res.status(404).json({ error: 'Grupo não encontrado' });
@@ -344,7 +492,6 @@ app.get('/api/admin/groups/:id', authMiddleware, (req, res) => {
   res.json({ ...group, routerIds });
 });
 
-// Grupos - Criar
 app.post('/api/admin/groups', authMiddleware, (req, res) => {
   const { name, whatsappNumber, notifyLinkDown, notifySdwanSwitch, notifyRouterOffline, routerIds } = req.body;
   let cleanPhone = (whatsappNumber || '').replace(/\D/g, '');
@@ -365,11 +512,9 @@ app.post('/api/admin/groups', authMiddleware, (req, res) => {
   res.json({ id: groupId, success: true });
 });
 
-// Grupos - Atualizar (PUT)
 app.put('/api/admin/groups/:id', authMiddleware, (req, res) => {
   const groupId = req.params.id;
   const { name, whatsappNumber, notifyLinkDown, notifySdwanSwitch, notifyRouterOffline, routerIds } = req.body;
-
   let cleanPhone = (whatsappNumber || '').replace(/\D/g, '');
   if (cleanPhone && !cleanPhone.startsWith('55')) cleanPhone = '55' + cleanPhone;
 
@@ -383,7 +528,6 @@ app.put('/api/admin/groups/:id', authMiddleware, (req, res) => {
     WHERE id = ?
   `).run(name, cleanPhone, notifyLinkDown ? 1 : 0, notifySdwanSwitch ? 1 : 0, notifyRouterOffline ? 1 : 0, groupId);
 
-  // Atualiza roteadores vinculados
   db.prepare('DELETE FROM group_routers WHERE group_id = ?').run(groupId);
   if (Array.isArray(routerIds)) {
     const insertGR = db.prepare('INSERT INTO group_routers (group_id, router_id) VALUES (?, ?)');
@@ -391,17 +535,15 @@ app.put('/api/admin/groups/:id', authMiddleware, (req, res) => {
       insertGR.run(groupId, rId);
     }
   }
-
   res.json({ success: true });
 });
 
-// Grupos - Deletar
 app.delete('/api/admin/groups/:id', authMiddleware, (req, res) => {
   db.prepare('DELETE FROM access_groups WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
-// 2. Usuários - Listar
+// Usuários CRUD
 app.get('/api/admin/users', authMiddleware, (req, res) => {
   const users = db.prepare(`
     SELECT u.id, u.name, u.username, u.role, u.group_id, u.inactivity_timeout_min, u.created_at, g.name as group_name
@@ -412,14 +554,12 @@ app.get('/api/admin/users', authMiddleware, (req, res) => {
   res.json(users);
 });
 
-// Usuários - Obter por ID para Edição
 app.get('/api/admin/users/:id', authMiddleware, (req, res) => {
   const user = db.prepare('SELECT id, name, username, role, group_id, inactivity_timeout_min FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
   res.json(user);
 });
 
-// Usuários - Criar
 app.post('/api/admin/users', authMiddleware, (req, res) => {
   const { name, username, password, role, groupId, timeoutMinutes } = req.body;
   const hash = bcrypt.hashSync(password || '123456', 10);
@@ -434,7 +574,6 @@ app.post('/api/admin/users', authMiddleware, (req, res) => {
   }
 });
 
-// Usuários - Atualizar (PUT)
 app.put('/api/admin/users/:id', authMiddleware, (req, res) => {
   const userId = req.params.id;
   const { name, username, password, role, groupId, timeoutMinutes } = req.body;
@@ -469,7 +608,6 @@ app.put('/api/admin/users/:id', authMiddleware, (req, res) => {
   }
 });
 
-// Usuários - Deletar
 app.delete('/api/admin/users/:id', authMiddleware, (req, res) => {
   if (parseInt(req.params.id, 10) === req.user.id) {
     return res.status(400).json({ error: 'Você não pode excluir o seu próprio usuário logado' });
@@ -499,7 +637,7 @@ app.post('/api/admin/evolution', authMiddleware, (req, res) => {
   res.json({ success: true });
 });
 
-// Watcher Roteadores Offline (+5 min)
+// Watcher Roteadores Offline
 setInterval(() => {
   try {
     const offlineRouters = db.prepare(`
@@ -516,5 +654,5 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`[Tracert+] Servidor ativo em http://localhost:${PORT}`);
+  console.log(`[Tracert+] Servidor ativo na porta ${PORT}`);
 });

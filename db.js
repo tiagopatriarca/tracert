@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Permite customizar o diretório do banco via variável de ambiente (ex: /app/data em Docker)
 const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -26,7 +25,7 @@ export function initDatabase() {
     );
   `);
 
-  // Roteadores (MikroTiks)
+  // Roteadores (MikroTiks) - com telemetria de hardware/firmware
   db.exec(`
     CREATE TABLE IF NOT EXISTS routers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,13 +33,23 @@ export function initDatabase() {
       name TEXT NOT NULL,
       token TEXT UNIQUE NOT NULL,
       model TEXT,
+      routeros_version TEXT,
+      firmware_version TEXT,
+      cpu_model TEXT,
+      cpu_count INTEGER,
+      cpu_load INTEGER,
+      total_memory INTEGER, /* em MB */
+      free_memory INTEGER,
+      uptime TEXT,
+      board_name TEXT,
+      serial_number TEXT,
       last_seen DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
     );
   `);
 
-  // Grupos de Acesso e Notificação WhatsApp
+  // Grupos de Acesso
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +62,7 @@ export function initDatabase() {
     );
   `);
 
-  // Relacionamento Grupo <-> MikroTiks permitidos
+  // Relacionamento Grupo <-> Roteadores
   db.exec(`
     CREATE TABLE IF NOT EXISTS group_routers (
       group_id INTEGER NOT NULL,
@@ -91,7 +100,7 @@ export function initDatabase() {
     );
   `);
 
-  // Status dos Links WAN (Atual)
+  // Status dos Links WAN
   db.exec(`
     CREATE TABLE IF NOT EXISTS link_statuses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,7 +115,7 @@ export function initDatabase() {
     );
   `);
 
-  // Histórico de Queda e Retorno para Relatório de Disponibilidade / SLA
+  // Histórico de Queda e Retorno (SLA)
   db.exec(`
     CREATE TABLE IF NOT EXISTS link_outages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +128,7 @@ export function initDatabase() {
     );
   `);
 
-  // Histórico Simples de Eventos
+  // Histórico de Eventos
   db.exec(`
     CREATE TABLE IF NOT EXISTS link_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,7 +174,7 @@ export function initDatabase() {
     );
   `);
 
-  // Métricas para Gráficos
+  // Métricas SD-WAN
   db.exec(`
     CREATE TABLE IF NOT EXISTS sdwan_metrics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,46 +187,15 @@ export function initDatabase() {
     );
   `);
 
-  // Popula dados iniciais (admin/admin123) se a base estiver zerada
+  // Cria apenas o usuário admin inicial se zerado, sem dados fakes
   const userCheck = db.prepare('SELECT count(*) as count FROM users').get();
   if (userCheck.count === 0) {
     db.exec(`
-      INSERT INTO clients (id, name, description) VALUES (1, 'ARO Marketing', 'Cliente Matriz');
-      INSERT INTO routers (id, client_id, name, token, model, last_seen) VALUES (1, 1, 'MikroTik CCR2004 Matriz', 'MK-ARO-MATRIZ-01', 'CCR2004-16G-2S+', datetime('now'));
-
-      INSERT INTO access_groups (id, name, whatsapp_number, notify_link_down, notify_sdwan_switch, notify_router_offline) 
-      VALUES (1, 'Administradores TI Plus', '5585999999999', 1, 1, 1);
-
-      INSERT INTO group_routers (group_id, router_id) VALUES (1, 1);
-
       INSERT INTO users (id, name, username, password_hash, role, group_id, inactivity_timeout_min)
-      VALUES (1, 'Administrador Geral', 'admin', '$2a$10$9v1P3uC48t3aB4vC3tF6eeo1fS4L/K/6N/QeT0rU/O7X7f3gO6X1a', 'ADMIN', 1, 15);
+      VALUES (1, 'Administrador', 'admin', '$2a$10$9v1P3uC48t3aB4vC3tF6eeo1fS4L/K/6N/QeT0rU/O7X7f3gO6X1a', 'ADMIN', NULL, 15);
 
       INSERT INTO evolution_config (id, base_url, api_key, instance_name, enabled)
-      VALUES (1, 'https://api.evolution.seuservidor.com', '', 'instancia-tiplus', 0);
-
-      INSERT INTO link_statuses (router_id, link_name, status, score, last_changed) VALUES 
-      (1, 'ITS', 'UP', 8, datetime('now')),
-      (1, 'CLARO', 'UP', 8, datetime('now'));
-
-      INSERT INTO link_outages (router_id, link_name, down_time, up_time, duration_seconds) VALUES
-      (1, 'CLARO', datetime('now', '-2 days'), datetime('now', '-2 days', '+18 minutes'), 1080),
-      (1, 'CLARO', datetime('now', '-1 days'), datetime('now', '-1 days', '+7 minutes'), 420),
-      (1, 'ITS', datetime('now', '-4 hours'), datetime('now', '-4 hours', '+12 minutes'), 720);
-
-      INSERT INTO sdwan_targets (id, router_id, name, address, active_link, metric_rtt, metric_loss, last_tested)
-      VALUES 
-      (1, 1, 'Email - Entrada', 'outlook.office365.com', 'ITS', 0.42, 0, datetime('now')),
-      (2, 1, 'Email - Saida', 'smtp.office365.com', 'ITS', 0.38, 0, datetime('now')),
-      (3, 1, 'Gmail', 'gmail.com', 'ITS', 0.55, 0, datetime('now')),
-      (4, 1, 'Restrito', 'restrito.aromarketing.com.br', 'ITS', 0.60, 0, datetime('now')),
-      (5, 1, 'Site - Aro', 'aromarketing.com.br', 'ITS', 0.26, 0, datetime('now'));
-
-      INSERT INTO sdwan_history (target_id, link_name, started_at, ended_at, test_count, avg_rtt, jitter, is_current)
-      VALUES
-      (1, 'ITS', datetime('now', '-30 minutes'), NULL, 9, 0.42, 0.42, 1),
-      (1, 'CLARO', datetime('now', '-1 hours'), datetime('now', '-30 minutes'), 15, 1.55, 1.55, 0),
-      (1, 'ITS', datetime('now', '-6 hours'), datetime('now', '-1 hours'), 120, 0.14, 0.14, 0);
+      VALUES (1, '', '', '', 0);
     `);
   }
 }

@@ -7,7 +7,6 @@ let chartLink2Instance = null;
 let lastActivityTime = Date.now();
 let inactivityTimerInterval = null;
 
-// Inicialização
 document.addEventListener('DOMContentLoaded', () => {
   if (!authToken || !currentUser) {
     mostrarTelaLogin();
@@ -52,6 +51,7 @@ function iniciarSessao() {
   }, 10000);
 
   carregarClientes();
+  carregarOverviewDashboard();
 }
 
 async function realizarLogin(e) {
@@ -108,38 +108,112 @@ async function apiFetch(url, options = {}) {
 function switchView(viewName) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('main.content-body').forEach(el => el.style.display = 'none');
+  const tenantFilter = document.getElementById('tenant-filter-bar');
 
-  if (viewName === 'sdwan') {
+  if (viewName === 'dashboard') {
     document.querySelectorAll('.nav-item')[0].classList.add('active');
+    document.getElementById('view-dashboard').style.display = 'block';
+    document.getElementById('breadcrumb-current').innerText = 'Painel Geral';
+    if (tenantFilter) tenantFilter.style.display = 'none';
+    carregarOverviewDashboard();
+  } else if (viewName === 'sdwan') {
+    document.querySelectorAll('.nav-item')[1].classList.add('active');
     document.getElementById('view-sdwan').style.display = 'block';
     document.getElementById('breadcrumb-current').innerText = 'SD-WAN';
+    if (tenantFilter) tenantFilter.style.display = 'flex';
     carregarSDWAN();
   } else if (viewName === 'links') {
-    document.querySelectorAll('.nav-item')[1].classList.add('active');
+    document.querySelectorAll('.nav-item')[2].classList.add('active');
     document.getElementById('view-links').style.display = 'block';
     document.getElementById('breadcrumb-current').innerText = 'Status dos Links';
+    if (tenantFilter) tenantFilter.style.display = 'flex';
     carregarStatusLinks();
   } else if (viewName === 'reports') {
-    document.querySelectorAll('.nav-item')[2].classList.add('active');
+    document.querySelectorAll('.nav-item')[3].classList.add('active');
     document.getElementById('view-reports').style.display = 'block';
     document.getElementById('breadcrumb-current').innerText = 'Relatórios & SLA';
+    if (tenantFilter) tenantFilter.style.display = 'flex';
     iniciarDatasFiltro();
     carregarRelatorioSelecionado();
   } else if (viewName === 'admin') {
-    document.querySelectorAll('.nav-item')[3].classList.add('active');
+    document.querySelectorAll('.nav-item')[4].classList.add('active');
     document.getElementById('view-admin').style.display = 'block';
-    document.getElementById('breadcrumb-current').innerText = 'Administração & WhatsApp';
+    document.getElementById('breadcrumb-current').innerText = 'Administração & Gestão';
+    if (tenantFilter) tenantFilter.style.display = 'none';
+    carregarAdminClientes();
+    carregarAdminRouters();
     carregarAdminEvolution();
     carregarAdminGrupos();
     carregarAdminUsuarios();
   }
 }
 
+// ----------------------------------------------------------------------
+// 0. PAINEL GERAL CENTRAL (OVERVIEW / NOC)
+// ----------------------------------------------------------------------
+async function carregarOverviewDashboard() {
+  const res = await apiFetch('/api/dashboard/overview');
+  const data = await res.json();
+
+  document.getElementById('ov-total-routers').innerText = data.totalRouters;
+  document.getElementById('ov-online-routers').innerText = data.onlineRouters;
+  document.getElementById('ov-offline-routers').innerText = data.offlineRouters;
+  document.getElementById('ov-links-down').innerText = data.totalLinksDown;
+
+  const linksDownList = document.getElementById('ov-links-down-list');
+  linksDownList.innerHTML = '';
+  if (data.linksDown.length === 0) {
+    linksDownList.innerHTML = '<div style="color: #16a34a; font-weight:600; padding:10px;">🟢 Todos os links WAN estão 100% operacionais no momento!</div>';
+  } else {
+    data.linksDown.forEach(l => {
+      const item = document.createElement('div');
+      item.style.cssText = 'padding: 8px 10px; border-bottom: 1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;';
+      item.innerHTML = `
+        <div>
+          <strong style="color:#dc2626;">${l.link_name}</strong> - ${l.router_name} (${l.client_name})
+        </div>
+        <div style="font-size:12px; color:#64748b;">Queda em: ${formatarData(l.last_changed)}</div>
+      `;
+      linksDownList.appendChild(item);
+    });
+  }
+
+  const eventsList = document.getElementById('ov-recent-events-list');
+  eventsList.innerHTML = '';
+  if (data.recentEvents.length === 0) {
+    eventsList.innerHTML = '<div style="color:#64748b; padding:10px;">Nenhum evento registrado ainda.</div>';
+  } else {
+    data.recentEvents.forEach(e => {
+      const item = document.createElement('div');
+      item.style.cssText = 'padding: 8px 10px; border-bottom: 1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; font-size:13px;';
+      const color = e.status === 'UP' ? '#16a34a' : '#dc2626';
+      item.innerHTML = `
+        <div>
+          <strong style="color:${color};">${e.status}</strong>: ${e.link_name} em <em>${e.router_name}</em>
+        </div>
+        <div style="font-size:11.5px; color:#64748b;">${formatarData(e.created_at)}</div>
+      `;
+      eventsList.appendChild(item);
+    });
+  }
+}
+
+// ----------------------------------------------------------------------
+// SELETORES CLIENTES / MIKROTIKS
+// ----------------------------------------------------------------------
 async function carregarClientes() {
   const res = await apiFetch('/api/clients');
   const clients = await res.json();
   const select = document.getElementById('client-select');
   select.innerHTML = '';
+
+  if (clients.length === 0) {
+    const opt = document.createElement('option');
+    opt.innerText = 'Cadastre um Cliente';
+    select.appendChild(opt);
+    currentClientId = null;
+    return;
+  }
 
   clients.forEach((c, idx) => {
     const opt = document.createElement('option');
@@ -158,6 +232,7 @@ async function onClientChange() {
 }
 
 async function carregarRoteadoresDoCliente() {
+  if (!currentClientId) return;
   const res = await apiFetch(`/api/routers?clientId=${currentClientId}`);
   const routers = await res.json();
   const select = document.getElementById('router-select');
@@ -165,7 +240,7 @@ async function carregarRoteadoresDoCliente() {
 
   if (routers.length === 0) {
     const opt = document.createElement('option');
-    opt.innerText = 'Nenhum MikroTik permitido';
+    opt.innerText = 'Nenhum MikroTik cadastrado';
     select.appendChild(opt);
     currentRouterId = null;
     return;
@@ -188,21 +263,29 @@ function onRouterChange() {
 }
 
 // ----------------------------------------------------------------------
-// RENDERIZAR CARDS SD-WAN (Print 1)
+// 1. CARDS SD-WAN & BOTÃO ADICIONAR DESTINO
 // ----------------------------------------------------------------------
 async function carregarSDWAN() {
-  if (!currentRouterId) return;
+  if (!currentRouterId) {
+    document.getElementById('sdwan-cards-container').innerHTML = '<div style="color:#64748b; padding:20px;">Nenhum MikroTik selecionado. Cadastre um cliente e roteador na administração.</div>';
+    return;
+  }
   const res = await apiFetch(`/api/routers/${currentRouterId}/sdwan`);
   const targets = await res.json();
 
   const container = document.getElementById('sdwan-cards-container');
   container.innerHTML = '';
 
+  if (targets.length === 0) {
+    container.innerHTML = '<div style="color:#64748b; padding:20px;">Nenhum destino monitorado ainda. Clique no botão <strong>+ Adicionar Destino</strong> acima para cadastrar o primeiro serviço (ex: Email, Sistema Nuvem, ERP)!</div>';
+    return;
+  }
+
   targets.forEach(t => {
     const card = document.createElement('div');
     card.className = 'sdwan-card';
 
-    const sparklineSvg = gerarSparklineSvg(t.sparkline || [0.4, 0.42, 0.38, 0.45, 0.41]);
+    const sparklineSvg = gerarSparklineSvg(t.sparkline || [1, 1]);
     const isIts = (t.active_link || '').toUpperCase().includes('ITS');
     const linkIndicatorClass = isIts ? 'its' : 'claro';
 
@@ -216,7 +299,7 @@ async function carregarSDWAN() {
             <strong>Link:</strong> 
             <span class="link-pill">
               <span class="link-indicator ${linkIndicatorClass}"></span> 
-              ${t.active_link || 'N/A'}
+              ${t.active_link || 'Aguardando'}
             </span>
           </div>
           <div><strong>Endereço:</strong> ${t.address}</div>
@@ -232,10 +315,43 @@ async function carregarSDWAN() {
       <div class="card-actions-bar">
         <span class="card-action-btn" onclick="abrirTimeline(${t.id}, '${t.name}')">📑 Relatório</span>
         <span class="card-action-btn" onclick="abrirGraficos(${t.id}, '${t.name}')">📊 Rel. Detalhado</span>
+        <span class="card-action-btn" style="color:#ef4444;" onclick="excluirDestinoSDWAN(${t.id})">🗑️</span>
       </div>
     `;
     container.appendChild(card);
   });
+}
+
+function abrirModalNovoDestino() {
+  if (!currentRouterId) {
+    alert('Selecione ou cadastre um MikroTik primeiro.');
+    return;
+  }
+  document.getElementById('sdwan-novo-nome').value = '';
+  document.getElementById('sdwan-novo-endereco').value = '';
+  document.getElementById('modal-sdwan-destino').style.display = 'flex';
+}
+
+async function salvarNovoDestinoSDWAN(e) {
+  e.preventDefault();
+  const name = document.getElementById('sdwan-novo-nome').value;
+  const address = document.getElementById('sdwan-novo-endereco').value;
+
+  await apiFetch(`/api/routers/${currentRouterId}/sdwan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, address })
+  });
+
+  fecharModais();
+  carregarSDWAN();
+}
+
+async function excluirDestinoSDWAN(targetId) {
+  if (confirm('Deseja excluir o monitoramento deste destino SD-WAN?')) {
+    await apiFetch(`/api/sdwan/${targetId}`, { method: 'DELETE' });
+    carregarSDWAN();
+  }
 }
 
 function gerarSparklineSvg(points) {
@@ -342,7 +458,7 @@ async function abrirGraficos(targetId, targetName) {
 }
 
 // ----------------------------------------------------------------------
-// STATUS DOS LINKS
+// 2. STATUS DOS LINKS
 // ----------------------------------------------------------------------
 async function carregarStatusLinks() {
   if (!currentRouterId) return;
@@ -389,7 +505,7 @@ async function carregarStatusLinks() {
 }
 
 // ----------------------------------------------------------------------
-// RELATÓRIOS & SLA
+// 3. RELATÓRIOS & SLA
 // ----------------------------------------------------------------------
 function iniciarDatasFiltro() {
   const hoje = new Date().toISOString().split('T')[0];
@@ -509,8 +625,188 @@ function exportarRelatorioPDF() {
 }
 
 // ----------------------------------------------------------------------
-// ADMINISTRAÇÃO: EVOLUTION API, GRUPOS (CRUD) E USUÁRIOS (CRUD)
+// 4. ADMINISTRAÇÃO: CLIENTES, MIKROTIKS (COM HARDWARE), EVOLUTION, GRUPOS E USUÁRIOS
 // ----------------------------------------------------------------------
+
+// CLIENTES CRUD
+async function carregarAdminClientes() {
+  const res = await apiFetch('/api/clients');
+  const clients = await res.json();
+  const tbody = document.querySelector('#admin-clients-table tbody');
+  tbody.innerHTML = '';
+
+  clients.forEach(c => {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--border-color)';
+    tr.innerHTML = `
+      <td style="padding: 10px; font-weight: 600;">${c.name}</td>
+      <td style="padding: 10px; color: #64748b;">${c.description || 'N/A'}</td>
+      <td style="padding: 10px; font-size: 12px;">${formatarData(c.created_at)}</td>
+      <td style="padding: 10px; text-align: right;">
+        <button onclick="editarCliente(${c.id}, '${c.name}', '${c.description || ''}')" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
+        <button onclick="excluirCliente(${c.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function abrirModalCliente() {
+  document.getElementById('modal-cliente-title').innerText = 'Cadastrar Cliente';
+  document.getElementById('cliente-id').value = '';
+  document.getElementById('cliente-nome').value = '';
+  document.getElementById('cliente-desc').value = '';
+  document.getElementById('modal-cliente').style.display = 'flex';
+}
+
+function editarCliente(id, name, desc) {
+  document.getElementById('modal-cliente-title').innerText = 'Editar Cliente';
+  document.getElementById('cliente-id').value = id;
+  document.getElementById('cliente-nome').value = name;
+  document.getElementById('cliente-desc').value = desc;
+  document.getElementById('modal-cliente').style.display = 'flex';
+}
+
+async function salvarCliente(e) {
+  e.preventDefault();
+  const id = document.getElementById('cliente-id').value;
+  const name = document.getElementById('cliente-nome').value;
+  const description = document.getElementById('cliente-desc').value;
+
+  if (id) {
+    await apiFetch(`/api/clients/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description })
+    });
+  } else {
+    await apiFetch('/api/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description })
+    });
+  }
+
+  fecharModais();
+  carregarAdminClientes();
+  carregarClientes();
+}
+
+async function excluirCliente(id) {
+  if (confirm('Tem certeza que deseja excluir este cliente? Todos os MikroTiks vinculados também serão removidos.')) {
+    await apiFetch(`/api/clients/${id}`, { method: 'DELETE' });
+    carregarAdminClientes();
+    carregarClientes();
+  }
+}
+
+// MIKROTIKS CRUD (COM DADOS DE HARDWARE E FIRMWARE)
+async function carregarAdminRouters() {
+  const res = await apiFetch('/api/routers');
+  const routers = await res.json();
+  const tbody = document.querySelector('#admin-routers-table tbody');
+  tbody.innerHTML = '';
+
+  routers.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--border-color)';
+
+    const board = r.model || r.board_name || 'MikroTik';
+    const osVer = r.routeros_version ? `ROS ${r.routeros_version}` : 'Aguardando telemetria';
+    const fwVer = r.firmware_version ? `FW: ${r.firmware_version}` : '';
+    const cpuInfo = r.cpu_load !== null && r.cpu_load !== undefined ? `CPU: ${r.cpu_load}% (${r.cpu_count || 1}x)` : 'CPU: N/A';
+    const memInfo = r.total_memory ? `Mem: ${r.free_memory || 0}MB livre / ${r.total_memory}MB` : '';
+
+    tr.innerHTML = `
+      <td style="padding: 10px; font-weight: 600;">${r.client_name}</td>
+      <td style="padding: 10px;">${r.name}</td>
+      <td style="padding: 10px; font-weight: 600; color: #4f46e5;">${board}</td>
+      <td style="padding: 10px; font-size: 12px; color: #334155;">${osVer} <br><span style="color:#64748b;">${fwVer}</span></td>
+      <td style="padding: 10px; font-size: 12px; color: #334155;">${cpuInfo} <br><span style="color:#64748b;">${memInfo}</span></td>
+      <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${r.token}</code></td>
+      <td style="padding: 10px; text-align: right;">
+        <button onclick="editarRouter(${r.id}, ${r.client_id}, '${r.name}', '${r.model || ''}')" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
+        <button onclick="excluirRouter(${r.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function abrirModalRouter() {
+  const res = await apiFetch('/api/clients');
+  const clients = await res.json();
+  const select = document.getElementById('router-form-client');
+  select.innerHTML = '';
+  clients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.innerText = c.name;
+    select.appendChild(opt);
+  });
+
+  document.getElementById('modal-router-title').innerText = 'Cadastrar MikroTik';
+  document.getElementById('router-id').value = '';
+  document.getElementById('router-form-nome').value = '';
+  document.getElementById('router-form-model').value = '';
+  document.getElementById('modal-router').style.display = 'flex';
+}
+
+async function editarRouter(id, clientId, name, model) {
+  const res = await apiFetch('/api/clients');
+  const clients = await res.json();
+  const select = document.getElementById('router-form-client');
+  select.innerHTML = '';
+  clients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.innerText = c.name;
+    if (c.id === clientId) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  document.getElementById('modal-router-title').innerText = 'Editar MikroTik';
+  document.getElementById('router-id').value = id;
+  document.getElementById('router-form-nome').value = name;
+  document.getElementById('router-form-model').value = model;
+  document.getElementById('modal-router').style.display = 'flex';
+}
+
+async function salvarRouter(e) {
+  e.preventDefault();
+  const id = document.getElementById('router-id').value;
+  const clientId = document.getElementById('router-form-client').value;
+  const name = document.getElementById('router-form-nome').value;
+  const model = document.getElementById('router-form-model').value;
+
+  if (id) {
+    await apiFetch(`/api/routers/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId, name, model })
+    });
+  } else {
+    await apiFetch('/api/routers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId, name, model })
+    });
+  }
+
+  fecharModais();
+  carregarAdminRouters();
+  carregarRoteadoresDoCliente();
+}
+
+async function excluirRouter(id) {
+  if (confirm('Tem certeza que deseja excluir este MikroTik?')) {
+    await apiFetch(`/api/routers/${id}`, { method: 'DELETE' });
+    carregarAdminRouters();
+    carregarRoteadoresDoCliente();
+  }
+}
+
+// EVOLUTION API
 async function carregarAdminEvolution() {
   const res = await apiFetch('/api/admin/evolution');
   const evo = await res.json();
@@ -534,29 +830,21 @@ async function salvarEvolution(e) {
   alert('Configuração da Evolution API salva com sucesso!');
 }
 
-// GRUPOS CRUD
+// GRUPOS
 async function carregarAdminGrupos() {
   const res = await apiFetch('/api/admin/groups');
   const groups = await res.json();
-
   const tbody = document.querySelector('#groups-table tbody');
   tbody.innerHTML = '';
   groups.forEach(g => {
-    const notifs = [];
-    if (g.notify_link_down) notifs.push('Queda de Link');
-    if (g.notify_sdwan_switch) notifs.push('Troca SD-WAN');
-    if (g.notify_router_offline) notifs.push('Roteador Offline');
-
     const tr = document.createElement('tr');
     tr.style.borderBottom = '1px solid var(--border-color)';
     tr.innerHTML = `
-      <td style="padding: 10px; font-weight: 600;">${g.name}</td>
-      <td style="padding: 10px; color: #16a34a; font-weight: 700;">+${g.whatsapp_number || 'N/A'}</td>
-      <td style="padding: 10px; font-size: 12px;">${notifs.join(' • ') || 'Nenhuma'}</td>
-      <td style="padding: 10px;">${g.routerIds ? g.routerIds.length : 0} MikroTik(s)</td>
-      <td style="padding: 10px; text-align: right;">
-        <button onclick="editarGrupo(${g.id})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
-        <button onclick="excluirGrupo(${g.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
+      <td style="padding: 8px; font-weight: 600;">${g.name}</td>
+      <td style="padding: 8px; color: #16a34a; font-weight: 700;">+${g.whatsapp_number || 'N/A'}</td>
+      <td style="padding: 8px; text-align: right;">
+        <button onclick="editarGrupo(${g.id})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:6px;">✏️</button>
+        <button onclick="excluirGrupo(${g.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -654,31 +942,27 @@ async function salvarGrupo(e) {
 }
 
 async function excluirGrupo(id) {
-  if (confirm('Tem certeza que deseja excluir este grupo de acesso?')) {
+  if (confirm('Tem certeza que deseja excluir este grupo?')) {
     await apiFetch(`/api/admin/groups/${id}`, { method: 'DELETE' });
     carregarAdminGrupos();
   }
 }
 
-// USUÁRIOS CRUD
+// USUÁRIOS
 async function carregarAdminUsuarios() {
   const res = await apiFetch('/api/admin/users');
   const users = await res.json();
-
   const tbody = document.querySelector('#users-table tbody');
   tbody.innerHTML = '';
   users.forEach(u => {
     const tr = document.createElement('tr');
     tr.style.borderBottom = '1px solid var(--border-color)';
     tr.innerHTML = `
-      <td style="padding: 10px; font-weight: 600;">${u.name}</td>
-      <td style="padding: 10px;">${u.username}</td>
-      <td style="padding: 10px;"><span class="status-badge">${u.role}</span></td>
-      <td style="padding: 10px;">${u.group_name || 'Acesso Total (Admin)'}</td>
-      <td style="padding: 10px;">${u.inactivity_timeout_min} minutos</td>
-      <td style="padding: 10px; text-align: right;">
-        <button onclick="editarUsuario(${u.id})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
-        <button onclick="excluirUsuario(${u.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
+      <td style="padding: 8px; font-weight: 600;">${u.name}</td>
+      <td style="padding: 8px;">${u.username}</td>
+      <td style="padding: 8px; text-align: right;">
+        <button onclick="editarUsuario(${u.id})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:6px;">✏️</button>
+        <button onclick="excluirUsuario(${u.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -698,7 +982,7 @@ async function abrirModalUsuario() {
   const res = await apiFetch('/api/admin/groups');
   const groups = await res.json();
   const select = document.getElementById('user-group');
-  select.innerHTML = '<option value="">Sem restrição (Acesso Admin)</option>';
+  select.innerHTML = '<option value="">Sem restrição (Acesso Total)</option>';
   groups.forEach(g => {
     const opt = document.createElement('option');
     opt.value = g.id;
@@ -725,7 +1009,7 @@ async function editarUsuario(id) {
   const resGroups = await apiFetch('/api/admin/groups');
   const groups = await resGroups.json();
   const select = document.getElementById('user-group');
-  select.innerHTML = '<option value="">Sem restrição (Acesso Admin)</option>';
+  select.innerHTML = '<option value="">Sem restrição (Acesso Total)</option>';
   groups.forEach(g => {
     const opt = document.createElement('option');
     opt.value = g.id;
@@ -772,7 +1056,7 @@ async function excluirUsuario(id) {
     const res = await apiFetch(`/api/admin/users/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const data = await res.json();
-      alert(data.error || 'Erro ao excluir usuário');
+      alert(data.error || 'Erro ao excluir');
       return;
     }
     carregarAdminUsuarios();
@@ -784,6 +1068,9 @@ function fecharModais() {
   document.getElementById('modal-graficos').style.display = 'none';
   document.getElementById('modal-grupo').style.display = 'none';
   document.getElementById('modal-usuario').style.display = 'none';
+  document.getElementById('modal-cliente').style.display = 'none';
+  document.getElementById('modal-router').style.display = 'none';
+  document.getElementById('modal-sdwan-destino').style.display = 'none';
 }
 
 function formatarData(dtString) {

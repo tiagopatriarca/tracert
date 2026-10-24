@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TRACERT+ > SD-WAN & Links Monitor</title>
+  <title>TRACERT+ > SD-WAN & Central NOC</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -15,8 +15,8 @@
     <div class="login-card">
       <div style="text-align: center; margin-bottom: 24px;">
         <div class="logo-badge" style="display: inline-block; font-size: 16px; padding: 8px 16px;">TRACERT+</div>
-        <h2 style="font-size: 20px; font-weight: 700; margin-top: 12px; color: #0f172a;">Acesso ao Painel SD-WAN</h2>
-        <p style="font-size: 13px; color: #64748b; margin-top: 4px;">Gerenciamento Multi-Tenant de MikroTiks</p>
+        <h2 style="font-size: 20px; font-weight: 700; margin-top: 12px; color: #0f172a;">Acesso ao Painel TRACERT+</h2>
+        <p style="font-size: 13px; color: #64748b; margin-top: 4px;">NOC & SD-WAN Multi-Tenant MikroTik</p>
       </div>
 
       <div id="login-alert" style="display: none; background: #fee2e2; color: #b91c1c; padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 15px;"></div>
@@ -41,20 +41,23 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="logo-badge">TRACERT+</div>
-        <div style="font-weight: 700; font-size: 15px;">SD-WAN Pro</div>
+        <div style="font-weight: 700; font-size: 15px;">Central NOC</div>
       </div>
       <nav class="sidebar-nav">
-        <div class="nav-item active" onclick="switchView('sdwan')">
+        <div class="nav-item active" onclick="switchView('dashboard')">
+          <span>📊</span> Painel Geral
+        </div>
+        <div class="nav-item" onclick="switchView('sdwan')">
           <span>🌐</span> SD-Wan
         </div>
         <div class="nav-item" onclick="switchView('links')">
           <span>📶</span> Status dos Links
         </div>
         <div class="nav-item" onclick="switchView('reports')">
-          <span>📊</span> Relatórios & SLA (PDF)
+          <span>📑</span> Relatórios & SLA (PDF)
         </div>
         <div class="nav-item" id="nav-admin" onclick="switchView('admin')">
-          <span>⚙️</span> Administração & WhatsApp
+          <span>⚙️</span> Administração & Gestão
         </div>
       </nav>
 
@@ -71,10 +74,10 @@
     <div class="main-wrapper">
       <header class="top-header">
         <div class="breadcrumbs">
-          TRACERT+ &gt; <span id="breadcrumb-current">SD-WAN</span>
+          TRACERT+ &gt; <span id="breadcrumb-current">Painel Geral</span>
         </div>
 
-        <div class="tenant-selector">
+        <div class="tenant-selector" id="tenant-filter-bar">
           <label style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">Cliente:</label>
           <select id="client-select" class="select-box" onchange="onClientChange()"></select>
 
@@ -83,11 +86,55 @@
         </div>
       </header>
 
-      <!-- VIEW 1: SD-WAN -->
-      <main id="view-sdwan" class="content-body">
+      <!-- VIEW 0: PAINEL GERAL (HOME / NOC OVERVIEW) -->
+      <main id="view-dashboard" class="content-body">
         <div class="page-title-row">
-          <h1 class="page-title">SD-Wan</h1>
-          <button class="btn-primary" onclick="alertModalNovoDestino()">+ Adicionar Destino</button>
+          <h1 class="page-title">Painel Geral de Monitoramento</h1>
+          <button class="btn-primary" onclick="carregarOverviewDashboard()">🔄 Atualizar</button>
+        </div>
+
+        <!-- Cards de Resumo Rápido -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; margin-bottom: 24px;">
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <div style="font-size: 13px; color: #64748b; font-weight: 600;">Total de MikroTiks</div>
+            <div id="ov-total-routers" style="font-size: 32px; font-weight: 800; color: #1e293b; margin-top: 4px;">0</div>
+          </div>
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <div style="font-size: 13px; color: #16a34a; font-weight: 600;">MikroTiks Online</div>
+            <div id="ov-online-routers" style="font-size: 32px; font-weight: 800; color: #16a34a; margin-top: 4px;">0</div>
+          </div>
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <div style="font-size: 13px; color: #dc2626; font-weight: 600;">MikroTiks Sem Resposta</div>
+            <div id="ov-offline-routers" style="font-size: 32px; font-weight: 800; color: #dc2626; margin-top: 4px;">0</div>
+          </div>
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <div style="font-size: 13px; color: #eab308; font-weight: 600;">Links WAN com Queda Ativa</div>
+            <div id="ov-links-down" style="font-size: 32px; font-weight: 800; color: #eab308; margin-top: 4px;">0</div>
+          </div>
+        </div>
+
+        <!-- Seção: Links em Alerta e Últimos Eventos -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <h3 style="font-size: 16px; margin-bottom: 12px; color: #dc2626;">🚨 Links WAN Atualmente OFFLINE</h3>
+            <div id="ov-links-down-list" style="max-height: 250px; overflow-y: auto;">
+              <!-- Lista de links caídos -->
+            </div>
+          </div>
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <h3 style="font-size: 16px; margin-bottom: 12px; color: #1e293b;">Últimos Eventos de Failover</h3>
+            <div id="ov-recent-events-list" style="max-height: 250px; overflow-y: auto;">
+              <!-- Eventos recentes -->
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- VIEW 1: SD-WAN (Cards com Sparklines) -->
+      <main id="view-sdwan" class="content-body" style="display: none;">
+        <div class="page-title-row">
+          <h1 class="page-title">SD-Wan Multi-Destino</h1>
+          <button class="btn-primary" onclick="abrirModalNovoDestino()">+ Adicionar Destino</button>
         </div>
         <div id="sdwan-cards-container" class="sdwan-grid"></div>
       </main>
@@ -115,7 +162,7 @@
         </div>
       </main>
 
-      <!-- VIEW 3: Relatórios e SLA -->
+      <!-- VIEW 3: Relatórios e SLA (PDF) -->
       <main id="view-reports" class="content-body" style="display: none;">
         <div class="page-title-row">
           <h1 class="page-title">Relatórios e Auditoria</h1>
@@ -155,26 +202,70 @@
         </div>
       </main>
 
-      <!-- VIEW 4: Administração -->
+      <!-- VIEW 4: ADMINISTRAÇÃO COMPLETA -->
       <main id="view-admin" class="content-body" style="display: none;">
         <div class="page-title-row">
-          <h1 class="page-title">Área de Administração</h1>
+          <h1 class="page-title">Área de Administração & Gestão</h1>
         </div>
 
-        <!-- Evolution API Config -->
+        <!-- ABA 1: CLIENTES -->
         <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
-          <h3 style="font-size: 16px; margin-bottom: 8px; color: #1e293b;">Integração com Evolution API (WhatsApp)</h3>
-          <p style="font-size: 13px; color: #64748b; margin-bottom: 16px;">
-            Envie alertas instantâneos de queda de link, trocas de rota no SD-WAN e perda de comunicação do roteador direto no WhatsApp.
-          </p>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div>
+              <h3 style="font-size: 16px; color: #1e293b;">Clientes / Empresas</h3>
+              <p style="font-size: 13px; color: #64748b;">Cadastre as empresas que possuem roteadores MikroTik gerenciados.</p>
+            </div>
+            <button class="btn-primary" onclick="abrirModalCliente()">+ Novo Cliente</button>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="admin-clients-table">
+            <thead>
+              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                <th style="padding: 10px;">Nome da Empresa</th>
+                <th style="padding: 10px;">Descrição</th>
+                <th style="padding: 10px;">Data de Cadastro</th>
+                <th style="padding: 10px; text-align: right;">Ações</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
 
+        <!-- ABA 2: MIKROTIKS (COM DADOS DE HARDWARE) -->
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div>
+              <h3 style="font-size: 16px; color: #1e293b;">Roteadores MikroTik (RouterBoards)</h3>
+              <p style="font-size: 13px; color: #64748b;">Equipamentos associados a clientes com telemetria automática de hardware e sistema.</p>
+            </div>
+            <button class="btn-primary" onclick="abrirModalRouter()">+ Novo MikroTik</button>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="admin-routers-table">
+            <thead>
+              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                <th style="padding: 10px;">Cliente</th>
+                <th style="padding: 10px;">Nome do Roteador</th>
+                <th style="padding: 10px;">Modelo / Board</th>
+                <th style="padding: 10px;">RouterOS / Firmware</th>
+                <th style="padding: 10px;">CPU / Memória</th>
+                <th style="padding: 10px;">Token Secreto</th>
+                <th style="padding: 10px; text-align: right;">Ações</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <!-- ABA 3: EVOLUTION API -->
+        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+          <h3 style="font-size: 16px; margin-bottom: 8px; color: #1e293b;">Integração Evolution API (WhatsApp)</h3>
+          <p style="font-size: 13px; color: #64748b; margin-bottom: 16px;">Configuração para envio dos alertas direto nos WhatsApps cadastrados.</p>
           <form id="form-evolution" onsubmit="salvarEvolution(event)" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 16px; align-items: flex-end;">
             <div>
-              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Base URL da Evolution API</label>
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Base URL</label>
               <input type="text" id="evo-base-url" class="input-text" placeholder="https://api.whatsapp.suaempresa.com" required>
             </div>
             <div>
-              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">API Key (Global ou da Instância)</label>
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">API Key</label>
               <input type="password" id="evo-api-key" class="input-text" placeholder="Sua Chave de API" required>
             </div>
             <div>
@@ -183,66 +274,129 @@
             </div>
             <div style="display: flex; align-items: center; gap: 10px; height: 38px;">
               <label style="font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px;">
-                <input type="checkbox" id="evo-enabled"> Ativar Envio
+                <input type="checkbox" id="evo-enabled"> Ativar
               </label>
               <button type="submit" class="btn-primary">Salvar</button>
             </div>
           </form>
         </div>
 
-        <!-- Grupos com Edição e Exclusão -->
-        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <div>
-              <h3 style="font-size: 16px; color: #1e293b;">Grupos de Acesso & Notificações</h3>
-              <p style="font-size: 13px; color: #64748b;">Associe empresas, MikroTiks específicos e o número de WhatsApp para receber alertas.</p>
+        <!-- ABA 4: GRUPOS E USUÁRIOS -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <h3 style="font-size: 16px; color: #1e293b;">Grupos de Acesso & WhatsApp</h3>
+              <button class="btn-primary" onclick="abrirModalGrupo()">+ Novo Grupo</button>
             </div>
-            <button class="btn-primary" onclick="abrirModalGrupo()">+ Novo Grupo</button>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;" id="groups-table">
+              <thead>
+                <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                  <th style="padding: 8px;">Grupo</th>
+                  <th style="padding: 8px;">WhatsApp</th>
+                  <th style="padding: 8px; text-align: right;">Ações</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
 
-          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="groups-table">
-            <thead>
-              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
-                <th style="padding: 10px;">Nome do Grupo</th>
-                <th style="padding: 10px;">WhatsApp (+55)</th>
-                <th style="padding: 10px;">Notificações Ativas</th>
-                <th style="padding: 10px;">MikroTiks Vinculados</th>
-                <th style="padding: 10px; text-align: right;">Ações</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
-        <!-- Usuários com Edição e Exclusão -->
-        <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <div>
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
               <h3 style="font-size: 16px; color: #1e293b;">Usuários do Painel</h3>
-              <p style="font-size: 13px; color: #64748b;">Gerencie quem pode acessar e o tempo de inatividade para logout automático.</p>
+              <button class="btn-primary" onclick="abrirModalUsuario()">+ Novo Usuário</button>
             </div>
-            <button class="btn-primary" onclick="abrirModalUsuario()">+ Novo Usuário</button>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;" id="users-table">
+              <thead>
+                <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                  <th style="padding: 8px;">Nome</th>
+                  <th style="padding: 8px;">Login</th>
+                  <th style="padding: 8px; text-align: right;">Ações</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
-
-          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="users-table">
-            <thead>
-              <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
-                <th style="padding: 10px;">Nome</th>
-                <th style="padding: 10px;">Login</th>
-                <th style="padding: 10px;">Função</th>
-                <th style="padding: 10px;">Grupo</th>
-                <th style="padding: 10px;">Timeout Inatividade</th>
-                <th style="padding: 10px; text-align: right;">Ações</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
         </div>
       </main>
     </div>
   </div>
 
-  <!-- MODAL: Grupo de Acesso (Criação e Edição) -->
+  <!-- MODAL: Adicionar Destino SD-WAN -->
+  <div id="modal-sdwan-destino" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 500px;">
+      <div class="dialog-header">
+        <h2 class="dialog-title">Adicionar Destino SD-WAN</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <form onsubmit="salvarNovoDestinoSDWAN(event)">
+          <div style="margin-bottom: 14px;">
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">Nome Amigável do Serviço</label>
+            <input type="text" id="sdwan-novo-nome" required class="input-text" placeholder="Ex: Email - Entrada">
+          </div>
+          <div style="margin-bottom: 18px;">
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">Endereço IP ou Domínio (DNS)</label>
+            <input type="text" id="sdwan-novo-endereco" required class="input-text" placeholder="Ex: outlook.office365.com ou 200.x.x.x">
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%;">Salvar Destino</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Cliente -->
+  <div id="modal-cliente" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 480px;">
+      <div class="dialog-header">
+        <h2 id="modal-cliente-title" class="dialog-title">Cadastrar Cliente</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <form onsubmit="salvarCliente(event)">
+          <input type="hidden" id="cliente-id" value="">
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Nome da Empresa</label>
+            <input type="text" id="cliente-nome" required class="input-text" placeholder="Ex: ARO Marketing">
+          </div>
+          <div style="margin-bottom: 18px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Descrição / Contato</label>
+            <input type="text" id="cliente-desc" class="input-text" placeholder="Ex: Matriz - Fortaleza">
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%;">Salvar Cliente</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: MikroTik -->
+  <div id="modal-router" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 520px;">
+      <div class="dialog-header">
+        <h2 id="modal-router-title" class="dialog-title">Cadastrar MikroTik</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <form onsubmit="salvarRouter(event)">
+          <input type="hidden" id="router-id" value="">
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Cliente / Empresa</label>
+            <select id="router-form-client" required class="select-box" style="width: 100%;"></select>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Nome do Roteador</label>
+            <input type="text" id="router-form-nome" required class="input-text" placeholder="Ex: CCR2004 Matriz">
+          </div>
+          <div style="margin-bottom: 18px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Modelo Inicial (ou será preenchido automaticamente pela telemetria)</label>
+            <input type="text" id="router-form-model" class="input-text" placeholder="Ex: CCR2004-16G-2S+">
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%;">Salvar MikroTik</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAIS DE GRUPO E USUARIO -->
   <div id="modal-grupo" class="timeline-modal" style="display: none;">
     <div class="timeline-dialog" style="max-width: 550px;">
       <div class="dialog-header">
@@ -250,47 +404,41 @@
         <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
       </div>
       <div class="dialog-body">
-        <form id="form-novo-grupo" onsubmit="salvarGrupo(event)">
+        <form onsubmit="salvarGrupo(event)">
           <input type="hidden" id="grupo-id" value="">
           <div style="margin-bottom: 14px;">
             <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">Nome do Grupo</label>
-            <input type="text" id="grupo-nome" required class="input-text" placeholder="Ex: Suporte ARO Marketing">
+            <input type="text" id="grupo-nome" required class="input-text">
           </div>
-
           <div style="margin-bottom: 14px;">
-            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">WhatsApp para Notificações</label>
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px;">WhatsApp (+55)</label>
             <div style="display: flex;">
               <span style="background: #e2e8f0; border: 1px solid var(--border-color); border-right: none; padding: 8px 12px; font-weight: 700; border-radius: 6px 0 0 6px; font-size: 13px; color: #475569;">+55</span>
               <input type="text" id="grupo-whatsapp" required class="input-text" style="border-radius: 0 6px 6px 0;" placeholder="85999999999" maxlength="11">
             </div>
-            <span style="font-size: 11px; color: #64748b;">Digite o DDD e o número (ex: 85999998888)</span>
           </div>
-
           <div style="margin-bottom: 16px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border-color);">
-            <div style="font-weight: 600; font-size: 12.5px; margin-bottom: 8px;">Notificações para enviar neste número:</div>
+            <div style="font-weight: 600; font-size: 12.5px; margin-bottom: 8px;">Notificações para enviar:</div>
             <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px;">
-              <input type="checkbox" id="notify-link-down" checked> Quando um dos links WAN cair (ou voltar)
+              <input type="checkbox" id="notify-link-down" checked> Queda / Retorno de Links WAN
             </label>
             <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px;">
-              <input type="checkbox" id="notify-sdwan" checked> Quando houver troca de rota no SD-WAN
+              <input type="checkbox" id="notify-sdwan" checked> Troca de rota no SD-WAN
             </label>
             <label style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
-              <input type="checkbox" id="notify-router-offline" checked> Quando o MikroTik parar de responder a API (+5 min)
+              <input type="checkbox" id="notify-router-offline" checked> MikroTik Offline (+5 min)
             </label>
           </div>
-
           <div style="margin-bottom: 20px;">
-            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px;">MikroTiks com Acesso Permitido:</label>
+            <label style="display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px;">MikroTiks Permitidos:</label>
             <div id="grupo-routers-checklist" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); padding: 8px; border-radius: 6px;"></div>
           </div>
-
           <button type="submit" class="btn-primary" style="width: 100%;">Salvar Grupo</button>
         </form>
       </div>
     </div>
   </div>
 
-  <!-- MODAL: Usuário (Criação e Edição) -->
   <div id="modal-usuario" class="timeline-modal" style="display: none;">
     <div class="timeline-dialog" style="max-width: 500px;">
       <div class="dialog-header">
@@ -298,14 +446,14 @@
         <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
       </div>
       <div class="dialog-body">
-        <form id="form-novo-usuario" onsubmit="salvarUsuario(event)">
+        <form onsubmit="salvarUsuario(event)">
           <input type="hidden" id="user-id" value="">
           <div style="margin-bottom: 12px;">
             <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Nome Completo</label>
             <input type="text" id="user-nome" required class="input-text">
           </div>
           <div style="margin-bottom: 12px;">
-            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Login de Usuário</label>
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Login</label>
             <input type="text" id="user-login" required class="input-text">
           </div>
           <div style="margin-bottom: 12px;">
@@ -317,7 +465,7 @@
             <select id="user-group" class="select-box" style="width: 100%;"></select>
           </div>
           <div style="margin-bottom: 18px;">
-            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Tempo de Inatividade para Logout (minutos)</label>
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Tempo de Inatividade (minutos)</label>
             <input type="number" id="user-timeout" value="15" min="1" max="120" class="input-text">
           </div>
           <button type="submit" class="btn-primary" style="width: 100%;">Salvar Usuário</button>
