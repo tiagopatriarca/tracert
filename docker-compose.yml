@@ -1,22 +1,20 @@
 services:
   tracert:
     build: .
+    image: tracert-plus:latest
     container_name: tracert-plus
     restart: unless-stopped
-    environment:
-      - PORT=3000
-      - DATA_DIR=/app/data
-    volumes:
-      - ./data:/app/data
-    networks:
-      - traefik-public
+    ports:
+      - "3000"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.tracert.rule=Host(`tracert.tiplus.inf.br`)"
       - "traefik.http.routers.tracert.entrypoints=websecure"
       - "traefik.http.routers.tracert.tls.certresolver=letsencrypt"
       - "traefik.http.services.tracert.loadbalancer.server.port=3000"
-
-networks:
-  traefik-public:
-    external: true
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
