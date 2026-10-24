@@ -1130,10 +1130,13 @@ function fecharModais() {
 
 function parseUtcDate(dtString) {
   if (!dtString) return null;
-  // Se a string vier no formato 'YYYY-MM-DD HH:MM:SS' sem fuso, adiciona Z para ser tratada como UTC
   let s = dtString.trim();
+  // Se a string vier no formato 'YYYY-MM-DD HH:MM:SS', converte para ISO
   if (s.includes(' ') && !s.includes('T')) s = s.replace(' ', 'T');
-  if (!s.endsWith('Z') && !s.includes('+') && !s.includes('-')) s += 'Z';
+  // Se não termina com Z e não possui sufixo de fuso (+00:00 ou -03:00 no final), adiciona 'Z' (UTC)
+  if (!s.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(s)) {
+    s += 'Z';
+  }
   return new Date(s);
 }
 
