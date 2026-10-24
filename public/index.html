@@ -493,15 +493,8 @@
         <h2 id="grafico-target-title" class="dialog-title">Gráficos de Latência por Link</h2>
         <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
       </div>
-      <div class="dialog-body">
-        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-          <h4 id="link1-title" style="margin-bottom: 10px; font-size: 15px; color: #1e293b;">ITS</h4>
-          <div style="height: 180px;"><canvas id="chart-link1"></canvas></div>
-        </div>
-        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
-          <h4 id="link2-title" style="margin-bottom: 10px; font-size: 15px; color: #1e293b;">CLARO</h4>
-          <div style="height: 180px;"><canvas id="chart-link2"></canvas></div>
-        </div>
+      <div class="dialog-body" id="modal-graficos-body">
+        <!-- Renderizado dinamicamente por link monitorado -->
       </div>
     </div>
   </div>

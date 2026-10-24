@@ -424,37 +424,89 @@ async function abrirTimeline(targetId, targetName) {
   });
 }
 
+let activeChartInstances = [];
+
 async function abrirGraficos(targetId, targetName) {
   document.getElementById('grafico-target-title').innerText = `${targetName} - Latência por Link`;
   document.getElementById('modal-graficos').style.display = 'flex';
 
+  const container = document.getElementById('modal-graficos-body');
+  container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary);">Carregando métricas...</div>';
+
+  activeChartInstances.forEach(c => c.destroy());
+  activeChartInstances = [];
+
   const res = await apiFetch(`/api/sdwan/${targetId}/metrics`);
   const data = await res.json();
 
-  const itsMetrics = data.metrics.filter(m => m.link_name.toUpperCase().includes('ITS'));
-  const claroMetrics = data.metrics.filter(m => m.link_name.toUpperCase().includes('CLARO'));
+  if (!data.metrics || data.metrics.length === 0) {
+    container.innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-secondary);">Nenhuma métrica registrada ainda para este destino.</div>';
+    return;
+  }
 
-  if (chartLink1Instance) chartLink1Instance.destroy();
-  const ctx1 = document.getElementById('chart-link1').getContext('2d');
-  chartLink1Instance = new Chart(ctx1, {
-    type: 'bar',
-    data: {
-      labels: itsMetrics.map(m => formatarHora(m.tested_at)),
-      datasets: [{ label: 'Latência ITS (ms)', data: itsMetrics.map(m => m.rtt), backgroundColor: '#10b981', borderRadius: 3 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
+  // Agrupa métricas por link
+  const linksMap = {};
+  data.metrics.forEach(m => {
+    if (!linksMap[m.link_name]) linksMap[m.link_name] = [];
+    linksMap[m.link_name].push(m);
   });
 
-  if (chartLink2Instance) chartLink2Instance.destroy();
-  const ctx2 = document.getElementById('chart-link2').getContext('2d');
-  chartLink2Instance = new Chart(ctx2, {
-    type: 'bar',
-    data: {
-      labels: claroMetrics.map(m => formatarHora(m.tested_at)),
-      datasets: [{ label: 'Latência CLARO (ms)', data: claroMetrics.map(m => m.rtt), backgroundColor: '#cbd5e1', borderRadius: 3 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
+  container.innerHTML = '';
+  const colors = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899'];
+  let colorIdx = 0;
+
+  for (const [linkName, metrics] of Object.entries(linksMap)) {
+    const card = document.createElement('div');
+    card.style.cssText = 'background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; margin-bottom: 20px;';
+
+    const canvasId = `chart-link-${Math.random().toString(36).substr(2, 9)}`;
+    const color = colors[colorIdx % colors.length];
+    colorIdx++;
+
+    const lastMetric = metrics[metrics.length - 1];
+    const ultRtt = lastMetric ? `${lastMetric.rtt.toFixed(1)}ms` : '-';
+    const ultLoss = lastMetric ? `${lastMetric.loss}%` : '-';
+
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+        <h4 style="margin: 0; font-size: 15px; color: #1e293b; font-weight:700;">${linkName}</h4>
+        <div style="font-size: 12px; color: var(--text-secondary);">
+          Último: <strong style="color:${color}">${ultRtt}</strong> | Perda: <strong>${ultLoss}</strong>
+        </div>
+      </div>
+      <div style="height: 180px;"><canvas id="${canvasId}"></canvas></div>
+    `;
+    container.appendChild(card);
+
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: metrics.map(m => formatarHora(m.tested_at)),
+        datasets: [{
+          label: `Latência ${linkName} (ms)`,
+          data: metrics.map(m => m.rtt),
+          borderColor: color,
+          backgroundColor: color + '22',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 3,
+          pointHoverRadius: 5
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            beginAtZero: false,
+            title: { display: true, text: 'ms' }
+          }
+        }
+      }
+    });
+    activeChartInstances.push(chart);
+  }
 }
 
 // ----------------------------------------------------------------------
@@ -479,7 +531,10 @@ async function carregarStatusLinks() {
       <div>
         <div class="link-name-huge">${l.link_name}</div>
         <div style="font-size: 12.5px; color: var(--text-secondary); margin-top: 4px;">
-          Última alteração: ${formatarData(l.last_changed)}
+          Último teste: <strong style="color:var(--text-primary);">${formatarData(l.updated_at || l.last_changed)}</strong>
+        </div>
+        <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">
+          Última oscilação/queda: ${formatarData(l.last_changed)}
         </div>
       </div>
       <div><span class="${badgeClass}">${statusText}</span></div>
@@ -1073,14 +1128,23 @@ function fecharModais() {
   document.getElementById('modal-sdwan-destino').style.display = 'none';
 }
 
+function parseUtcDate(dtString) {
+  if (!dtString) return null;
+  // Se a string vier no formato 'YYYY-MM-DD HH:MM:SS' sem fuso, adiciona Z para ser tratada como UTC
+  let s = dtString.trim();
+  if (s.includes(' ') && !s.includes('T')) s = s.replace(' ', 'T');
+  if (!s.endsWith('Z') && !s.includes('+') && !s.includes('-')) s += 'Z';
+  return new Date(s);
+}
+
 function formatarData(dtString) {
-  if (!dtString) return 'N/A';
-  const d = new Date(dtString);
+  const d = parseUtcDate(dtString);
+  if (!d || isNaN(d.getTime())) return 'N/A';
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function formatarHora(dtString) {
-  if (!dtString) return '';
-  const d = new Date(dtString);
+  const d = parseUtcDate(dtString);
+  if (!d || isNaN(d.getTime())) return '';
   return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
