@@ -525,10 +525,11 @@ async function carregarStatusLinks() {
     card.className = 'link-status-card';
     const isUp = l.status === 'UP';
     const badgeClass = isUp ? 'badge-on' : 'badge-off';
-    const statusText = isUp ? '● ONLINE' : '✖ OFFLINE';
+    const dotIcon = isUp ? '<span style="font-size:10px;">●</span>' : '<span style="font-size:10px;">✖</span>';
+    const statusText = isUp ? 'ONLINE' : 'OFFLINE';
 
     card.innerHTML = `
-      <div>
+      <div style="flex:1; padding-right:12px;">
         <div class="link-name-huge">${l.link_name}</div>
         <div style="font-size: 12.5px; color: var(--text-secondary); margin-top: 4px;">
           Último teste: <strong style="color:var(--text-primary);">${formatarData(l.updated_at || l.last_changed)}</strong>
@@ -537,7 +538,9 @@ async function carregarStatusLinks() {
           Última oscilação/queda: ${formatarData(l.last_changed)}
         </div>
       </div>
-      <div><span class="${badgeClass}">${statusText}</span></div>
+      <div style="flex-shrink:0;">
+        <span class="${badgeClass}">${dotIcon} <span>${statusText}</span></span>
+      </div>
     `;
     container.appendChild(card);
   });
