@@ -783,6 +783,7 @@ async function carregarAdminRouters() {
       <td style="padding: 10px; font-size: 12px; color: #334155;">${cpuInfo} <br><span style="color:#64748b;">${memInfo}</span></td>
       <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${r.token}</code></td>
       <td style="padding: 10px; text-align: right;">
+        <button onclick="abrirModalOTA(${r.id})" style="border:none; background:none; color:#10b981; cursor:pointer; font-weight:600; margin-right:8px;" title="Gestão Remota e Comandos OTA">🔄 OTA</button>
         <button onclick="editarRouter(${r.id}, ${r.client_id}, '${r.name}', '${r.model || ''}')" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
         <button onclick="excluirRouter(${r.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
       </td>
@@ -1129,6 +1130,8 @@ function fecharModais() {
   document.getElementById('modal-cliente').style.display = 'none';
   document.getElementById('modal-router').style.display = 'none';
   document.getElementById('modal-sdwan-destino').style.display = 'none';
+  const modalOta = document.getElementById('modal-ota');
+  if (modalOta) modalOta.style.display = 'none';
 }
 
 function parseUtcDate(dtString) {
@@ -1153,4 +1156,160 @@ function formatarHora(dtString) {
   const d = parseUtcDate(dtString);
   if (!d || isNaN(d.getTime())) return '';
   return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+
+// ----------------------------------------------------------------------
+// FUNÇÕES DE GESTÃO REMOTA & OTA (MODELO 2)
+// ----------------------------------------------------------------------
+let otaTargetRouterId = null;
+
+async function abrirModalOTA(routerId) {
+  otaTargetRouterId = routerId || currentRouterId;
+  if (!otaTargetRouterId) {
+    if (allRouters && allRouters.length > 0) otaTargetRouterId = allRouters[0].id;
+  }
+  if (!otaTargetRouterId) return alert('Nenhum roteador selecionado');
+
+  const router = allRouters.find(r => r.id === otaTargetRouterId);
+  const routerName = router ? router.name : 'Roteador ' + otaTargetRouterId;
+  const token = router ? router.token : '';
+
+  document.getElementById('ota-router-subtitle').innerText = `Roteador: ${routerName} (Token: ${token})`;
+  
+  const agentScript = `/system script remove [find name="tracert_sync"]
+/system script add dont-require-permissions=no name="tracert_sync" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local syncUrl "https://tracert.tiplus.inf.br/api/routers/sync?token=${token}"
+    :do {
+        /tool fetch url=$syncUrl dst-path="tracert_sync.rsc" keep-result=yes
+        :local f [/file find name="tracert_sync.rsc"]
+        :if ([:len $f] > 0) do={
+            :local sz [/file get $f size]
+            :if ($sz > 45) do={
+                /import file-name="tracert_sync.rsc"
+                /log info message="[TRACERT+] Comandos sincronizados da nuvem executados com sucesso!"
+            }
+            /file remove [find name="tracert_sync.rsc"]
+        }
+    } on-error={}
+}
+/system scheduler remove [find name="executa_tracert_sync"]
+/system scheduler add interval=1m name="executa_tracert_sync" on-event="tracert_sync" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup`;
+
+  document.getElementById('ota-agent-code').innerText = agentScript;
+  document.getElementById('modal-ota').style.display = 'flex';
+  carregarHistoricoOTA();
+}
+
+function alternarInstrucoesAgente() {
+  const el = document.getElementById('ota-agent-instructions');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function carregarHistoricoOTA() {
+  if (!otaTargetRouterId) return;
+  const tbody = document.getElementById('ota-commands-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" style="padding: 12px; text-align: center; color: #94a3b8;">Carregando histórico...</td></tr>';
+
+  try {
+    const res = await apiFetch(`/api/routers/${otaTargetRouterId}/commands`);
+    const commands = await res.json();
+    if (!commands || commands.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding: 12px; text-align: center; color: #94a3b8;">Nenhum comando na fila para este roteador.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = commands.map(cmd => {
+      let statusBadge = '<span style="background: #fef3c7; color: #d97706; padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 11px;">PENDENTE</span>';
+      if (cmd.status === 'EXECUTED') {
+        statusBadge = '<span style="background: #dcfce7; color: #15803d; padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 11px;">EXECUTADO</span>';
+      } else if (cmd.status === 'ERROR') {
+        statusBadge = '<span style="background: #fee2e2; color: #b91c1c; padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 11px;">ERRO</span>';
+      }
+
+      const created = cmd.created_at ? parseUtcDate(cmd.created_at).toLocaleString('pt-BR') : '-';
+      const cleanPayload = (cmd.payload || '').replace(/"/g, '&quot;');
+      const actionBtn = cmd.status === 'PENDING'
+        ? `<button onclick="cancelarComandoOTA(${cmd.id})" style="background:none; border:none; color:#ef4444; cursor:pointer; font-weight:600;">Cancelar</button>`
+        : '<span style="color:#94a3b8;">-</span>';
+
+      return `
+        <tr style="border-bottom: 1px solid var(--border-color);">
+          <td style="padding: 8px 10px; font-weight:600;">#${cmd.id}</td>
+          <td style="padding: 8px 10px; font-weight:500;" title="${cleanPayload}">${cmd.command_name || cmd.command_type}</td>
+          <td style="padding: 8px 10px; color:#64748b; font-size:11px;">${cmd.command_type}</td>
+          <td style="padding: 8px 10px;">${statusBadge}</td>
+          <td style="padding: 8px 10px; color:#64748b; font-size:11.5px;">${created}</td>
+          <td style="padding: 8px 10px; text-align:right;">${actionBtn}</td>
+        </tr>
+      `;
+    }).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding: 12px; text-align: center; color: #ef4444;">Erro ao carregar: ${e.message}</td></tr>`;
+  }
+}
+
+async function enviarSyncTargetsOTA() {
+  if (!otaTargetRouterId) return;
+  try {
+    const res = await apiFetch(`/api/routers/${otaTargetRouterId}/sync-targets`, { method: 'POST' });
+    const data = await res.json();
+    alert(data.message || 'Comando de sincronização enfileirado com sucesso!');
+    carregarHistoricoOTA();
+  } catch(e) {
+    alert('Erro: ' + e.message);
+  }
+}
+
+async function sincronizarDestinosRB() {
+  if (!currentRouterId) return alert('Selecione um roteador primeiro');
+  try {
+    const res = await apiFetch(`/api/routers/${currentRouterId}/sync-targets`, { method: 'POST' });
+    const data = await res.json();
+    alert(data.message || 'Comando de sincronização dos destinos enfileirado para a RB!');
+  } catch(e) {
+    alert('Erro: ' + e.message);
+  }
+}
+
+async function enviarOtaUpdateScript() {
+  if (!otaTargetRouterId) return;
+  if (!confirm('Deseja enviar a atualização completa do script SD-WAN (v4.1) via OTA para esta RouterBoard?')) return;
+  try {
+    const res = await apiFetch(`/api/routers/${otaTargetRouterId}/ota-update`, { method: 'POST' });
+    const data = await res.json();
+    alert(data.message || 'Atualização OTA do script enfileirada com sucesso!');
+    carregarHistoricoOTA();
+  } catch(e) {
+    alert('Erro: ' + e.message);
+  }
+}
+
+async function enviarComandoManualOTA() {
+  const input = document.getElementById('ota-custom-command');
+  const command = input.value.trim();
+  if (!command) return alert('Digite um comando do RouterOS');
+
+  try {
+    await apiFetch(`/api/routers/${otaTargetRouterId}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command, name: command.substring(0, 30) })
+    });
+    input.value = '';
+    alert('Comando inserido na fila de execução da RB!');
+    carregarHistoricoOTA();
+  } catch(e) {
+    alert('Erro: ' + e.message);
+  }
+}
+
+async function cancelarComandoOTA(id) {
+  if (!confirm('Cancelar este comando pendente?')) return;
+  try {
+    await apiFetch(`/api/commands/${id}`, { method: 'DELETE' });
+    carregarHistoricoOTA();
+  } catch(e) {
+    alert('Erro: ' + e.message);
+  }
 }

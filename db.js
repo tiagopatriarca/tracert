@@ -187,6 +187,24 @@ export function initDatabase() {
     );
   `);
 
+  // Fila de Comandos e Instrucoes OTA (Modelo 2)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS router_commands (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      command_type TEXT NOT NULL,
+      command_name TEXT,
+      payload TEXT NOT NULL,
+      status TEXT DEFAULT 'PENDING',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      fetched_at DATETIME,
+      executed_at DATETIME,
+      result_log TEXT,
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_router_commands_pending ON router_commands(router_id, status);
+  `);
+
   // Cria apenas o usuário admin inicial se zerado, sem dados fakes
   const userCheck = db.prepare('SELECT count(*) as count FROM users').get();
   if (userCheck.count === 0) {

@@ -224,6 +224,56 @@ app.post('/api/telemetry/sdwan', async (req, res) => {
   res.json({ success: true, target: name, activeLink: linkAtivo });
 });
 
+// 4. Sincronização e Execução de Comandos Remotos OTA (Modelo 2)
+app.get('/api/routers/sync', (req, res) => {
+  const token = req.query.token;
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  if (!token) return res.status(401).send('# [TRACERT+] Erro: Token obrigatorio\n');
+  const router = getRouterByToken(token);
+  if (!router) return res.status(401).send('# [TRACERT+] Erro: Token invalido\n');
+
+  // Atualiza heartbeat do roteador
+  db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
+
+  // Busca comandos pendentes na fila
+  const pending = db.prepare(`
+    SELECT * FROM router_commands 
+    WHERE router_id = ? AND status = 'PENDING' 
+    ORDER BY id ASC LIMIT 5
+  `).all(router.id);
+
+  if (!pending || pending.length === 0) {
+    return res.send('# TRACERT+ Sync: OK (Sem comandos pendentes)\n');
+  }
+
+  let rsc = `# ========================================================\n`;
+  rsc += `# TRACERT+ BATCH DE EXECUCAO - ${router.name}\n`;
+  rsc += `# Data de Geracao: ${new Date().toISOString()}\n`;
+  rsc += `# Comandos na fila: ${pending.length}\n`;
+  rsc += `# ========================================================\n\n`;
+
+  const markExecuted = db.prepare(`
+    UPDATE router_commands 
+    SET status = 'EXECUTED', fetched_at = datetime('now'), executed_at = datetime('now') 
+    WHERE id = ?
+  `);
+
+  for (const cmd of pending) {
+    rsc += `:do {\n`;
+    rsc += `    # Comando ID ${cmd.id} [${cmd.command_type}] - ${cmd.command_name || 'Comando'}\n`;
+    rsc += `    ${cmd.payload}\n`;
+    rsc += `    /log info message=("[TRACERT+] Comando ID ${cmd.id} (${cmd.command_name || cmd.command_type}) executado com sucesso!")\n`;
+    rsc += `} on-error={\n`;
+    rsc += `    /log error message=("[TRACERT+] Falha ao executar comando ID ${cmd.id} (${cmd.command_name || cmd.command_type})")\n`;
+    rsc += `}\n\n`;
+
+    markExecuted.run(cmd.id);
+  }
+
+  res.send(rsc);
+});
+
+
 // ----------------------------------------------------------------------
 // PAINEL CENTRAL (DASHBOARD GERAL / HOME)
 // ----------------------------------------------------------------------
@@ -387,11 +437,27 @@ app.post('/api/routers/:id/sdwan', authMiddleware, (req, res) => {
     ON CONFLICT(router_id, address) DO UPDATE SET name = excluded.name
   `).run(routerId, name, address);
 
+  try {
+    const syncScript = generateSyncTargetsScript(routerId);
+    enqueueCommand(routerId, 'SYNC_TARGETS', 'Auto-Sync: Novo Destino ' + name, syncScript);
+  } catch (err) {
+    console.error('Falha ao auto-enfileirar sync de destino:', err);
+  }
+
   res.json({ id: result.lastInsertRowid, name, address });
 });
 
 app.delete('/api/sdwan/:targetId', authMiddleware, (req, res) => {
+  const target = db.prepare('SELECT router_id, name FROM sdwan_targets WHERE id = ?').get(req.params.targetId);
   db.prepare('DELETE FROM sdwan_targets WHERE id = ?').run(req.params.targetId);
+  if (target) {
+    try {
+      const syncScript = generateSyncTargetsScript(target.router_id);
+      enqueueCommand(target.router_id, 'SYNC_TARGETS', 'Auto-Sync: Removido ' + target.name, syncScript);
+    } catch (err) {
+      console.error('Falha ao auto-enfileirar sync de remocao:', err);
+    }
+  }
   res.json({ success: true });
 });
 
@@ -416,6 +482,198 @@ app.get('/api/routers/:id/links', authMiddleware, (req, res) => {
   const links = db.prepare('SELECT * FROM link_statuses WHERE router_id = ? ORDER BY link_name ASC').all(routerId);
   const events = db.prepare('SELECT * FROM link_events WHERE router_id = ? ORDER BY created_at DESC LIMIT 30').all(routerId);
   res.json({ links, events });
+});
+
+// ----------------------------------------------------------------------
+// GESTÃO REMOTA & FILA DE COMANDOS OTA (MODELO 2)
+// ----------------------------------------------------------------------
+function enqueueCommand(routerId, type, name, payload) {
+  return db.prepare(`
+    INSERT INTO router_commands (router_id, command_type, command_name, payload, status)
+    VALUES (?, ?, ?, ?, 'PENDING')
+  `).run(routerId, type, name, payload);
+}
+
+function generateSyncTargetsScript(routerId) {
+  const router = db.prepare('SELECT name FROM routers WHERE id = ?').get(routerId);
+  const targets = db.prepare('SELECT name, address FROM sdwan_targets WHERE router_id = ?').all(routerId);
+  let rsc = `:log info message="[TRACERT+] Sincronizando address-list SDWAN_TARGETS...";\n`;
+  rsc += `/ip firewall address-list remove [find list="SDWAN_TARGETS" dynamic=no];\n`;
+  for (const t of targets) {
+    const cleanName = (t.name || t.address).replace(/"/g, '');
+    rsc += `/ip firewall address-list add list="SDWAN_TARGETS" address="${t.address}" comment="${cleanName}";\n`;
+  }
+  rsc += `:log info message="[TRACERT+] address-list SDWAN_TARGETS atualizada (${targets.length} destinos).";\n`;
+  return rsc;
+}
+
+function generateOtaSdwanScript(router) {
+  return `/system script remove [find name="sdwan_monitor"]
+/system script add dont-require-permissions=no name="sdwan_monitor" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local apiBaseUrl "https://tracert.tiplus.inf.br/api/telemetry/sdwan"
+    :local routerToken "${router.token}"
+    :local listName "SDWAN_TARGETS"
+    :local pingCount 3
+    :local pingInterval 00:00:00.2
+    :global foRouterName [/system identity get name]
+
+    :local linkNames [:toarray "LINK - TIM,Link - GSM"]
+    :local linkIfaces [:toarray "ether1-TIM,GSM"]
+    :local linkGws [:toarray "192.168.1.1,GSM"]
+
+    :foreach entry in=[/ip firewall address-list find list=$listName] do={
+        :local targetAddress [/ip firewall address-list get $entry address]
+        :local targetComment [/ip firewall address-list get $entry comment]
+        :local isDynamic [/ip firewall address-list get $entry dynamic]
+
+        :local parsedIp [:toip $targetAddress]
+        :local ipParaTestar ""
+        :local nomeExibicao $targetComment
+        :local processar false
+
+        :if ([:typeof $parsedIp] = "ip") do={
+            :if ($isDynamic = false) do={
+                :set ipParaTestar $targetAddress
+                :set processar true
+            }
+        } else={
+            :local dynEntry [/ip firewall address-list find list=$listName comment=$targetAddress dynamic=yes]
+            :if ([:len $dynEntry] > 0) do={
+                :set ipParaTestar [/ip firewall address-list get ($dynEntry->0) address]
+                :set processar true
+            }
+        }
+
+        :if ($processar = true) do={
+            :if ([:len $nomeExibicao] = 0) do={ :set nomeExibicao $targetAddress }
+
+            :local melhorLink ""
+            :local melhorGw ""
+            :local menorPerda 100
+            :local menorRtt 999999
+            :local linksDataJson ""
+
+            :local rotaAtualId [/ip route find dst-address=($ipParaTestar . "/32") comment~"SDWAN_AUTO"]
+            :local linkAtualName "PADRAO"
+            :if ([:len $rotaAtualId] > 0) do={
+                :local cmtAtual [/ip route get $rotaAtualId comment]
+                :set linkAtualName [:pick $cmtAtual ([:find $cmtAtual "via "] + 4) [:len $cmtAtual]]
+            }
+
+            :for i from=0 to=([:len $linkNames] - 1) do={
+                :local linkName ($linkNames->$i)
+                :local ifaceName ($linkIfaces->$i)
+                :local gw ($linkGws->$i)
+
+                :local pings [/ping $ipParaTestar interface=$ifaceName count=$pingCount interval=$pingInterval as-value]
+                :local totalNsec 0
+                :local recebidos 0
+
+                :foreach p in=$pings do={
+                    :local t ($p->"time")
+                    :if ([:typeof $t] = "time") do={
+                        :set totalNsec ($totalNsec + [:tonsec $t])
+                        :set recebidos ($recebidos + 1)
+                    }
+                }
+
+                :local perda 100
+                :local mediaRtt 999999
+                :if ($recebidos > 0) do={
+                    :set perda (100 - (($recebidos * 100) / $pingCount))
+                    :set mediaRtt ($totalNsec / $recebidos / 1000000)
+                    :if ($mediaRtt = 0) do={ :set mediaRtt 1 }
+                }
+
+                :local linkJson ("{\"link\":\"" . $linkName . "\",\"gw\":\"" . $gw . "\",\"perda\":" . $perda . ",\"rtt\":" . $mediaRtt . "}")
+                :if ([:len $linksDataJson] > 0) do={
+                    :set linksDataJson ($linksDataJson . "," . $linkJson)
+                } else={
+                    :set linksDataJson $linkJson
+                }
+
+                :if ($melhorLink = "") do={
+                    :set melhorLink $linkName
+                    :set melhorGw $gw
+                    :set menorPerda $perda
+                    :set menorRtt $mediaRtt
+                } else={
+                    :if ($perda < $menorPerda) do={
+                        :set melhorLink $linkName
+                        :set melhorGw $gw
+                        :set menorPerda $perda
+                        :set menorRtt $mediaRtt
+                    } else={
+                        :if ($perda = $menorPerda and $mediaRtt < $menorRtt) do={
+                            :set melhorLink $linkName
+                            :set melhorGw $gw
+                            :set menorPerda $perda
+                            :set menorRtt $mediaRtt
+                        }
+                    }
+                }
+            }
+
+            :local houveTroca false
+            :local flagTroca "false"
+            :if ($linkAtualName != $melhorLink and $melhorGw != "") do={
+                :set houveTroca true
+                :set flagTroca "true"
+                :do { /ip route remove [find dst-address=($ipParaTestar . "/32") comment~"SDWAN_AUTO"] } on-error={}
+                /ip route add dst-address=($ipParaTestar . "/32") gateway=$melhorGw comment=("SDWAN_AUTO [" . $nomeExibicao . "] via " . $melhorLink)
+                /log warning message=("[TRACERT+] Destino " . $nomeExibicao . " (" . $ipParaTestar . ") agora via [" . $melhorLink . "] - RTT: " . $menorRtt . "ms | Perda: " . $menorPerda . "%")
+            }
+
+            :local payload ("{\"token\":\"" . $routerToken . "\",\"roteador\":\"" . $foRouterName . "\",\"nomeDestino\":\"" . $nomeExibicao . "\",\"endereco\":\"" . $ipParaTestar . "\",\"linkAtivo\":\"" . $melhorLink . "\",\"linkAnterior\":\"" . $linkAtualName . "\",\"houveTroca\":" . $flagTroca . ",\"melhorRtt\":" . $menorRtt . ",\"melhorPerda\":" . $menorPerda . ",\"testes\":[" . $linksDataJson . "]}")
+            :do {
+                /tool fetch http-method=post http-header-field="Content-Type: application/json" url=($apiBaseUrl . "?token=" . $routerToken) http-data=$payload keep-result=no
+            } on-error={
+                /log error message=("[TRACERT+] Erro ao enviar telemetria para a API (" . $nomeExibicao . ")")
+            }
+        }
+    }
+}
+/system scheduler remove [find name="executa_sdwan_monitor"]
+/system scheduler add interval=1m name="executa_sdwan_monitor" on-event="sdwan_monitor" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+:log info message="[TRACERT+] Script sdwan_monitor v4.1 atualizado via OTA com sucesso!";
+`;
+}
+
+app.get('/api/routers/:id/commands', authMiddleware, (req, res) => {
+  const routerId = req.params.id;
+  const commands = db.prepare('SELECT * FROM router_commands WHERE router_id = ? ORDER BY id DESC LIMIT 50').all(routerId);
+  res.json(commands);
+});
+
+app.post('/api/routers/:id/commands', authMiddleware, (req, res) => {
+  const routerId = req.params.id;
+  const { command, name, type } = req.body;
+  if (!command) return res.status(400).json({ error: 'Comando obrigatorio' });
+
+  const result = enqueueCommand(routerId, type || 'RAW_SCRIPT', name || 'Comando Manual', command);
+  res.json({ success: true, id: result.lastInsertRowid });
+});
+
+app.post('/api/routers/:id/sync-targets', authMiddleware, (req, res) => {
+  const routerId = req.params.id;
+  const script = generateSyncTargetsScript(routerId);
+  const result = enqueueCommand(routerId, 'SYNC_TARGETS', 'Sincronizar Destinos SD-WAN', script);
+  res.json({ success: true, message: 'Comando de sincronizacao enfileirado para o roteador', id: result.lastInsertRowid });
+});
+
+app.post('/api/routers/:id/ota-update', authMiddleware, (req, res) => {
+  const routerId = req.params.id;
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId);
+  if (!router) return res.status(404).json({ error: 'Roteador nao encontrado' });
+
+  const script = generateOtaSdwanScript(router);
+  const result = enqueueCommand(router.id, 'OTA_SDWAN', 'Atualizacao OTA Script SD-WAN v4.1', script);
+  res.json({ success: true, message: 'Atualizacao OTA do script enfileirada com sucesso!', id: result.lastInsertRowid });
+});
+
+app.delete('/api/commands/:id', authMiddleware, (req, res) => {
+  db.prepare('DELETE FROM router_commands WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
 });
 
 // Relatórios
