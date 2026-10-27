@@ -309,13 +309,9 @@ app.get(['/api/routers/sync', '/api/routers/sync/:token'], (req, res) => {
   `);
 
   for (const cmd of pending) {
-    rsc += `:do {\n`;
-    rsc += `    # Comando ID ${cmd.id} [${cmd.command_type}] - ${cmd.command_name || 'Comando'}\n`;
-    rsc += `    ${cmd.payload}\n`;
-    rsc += `    /log info message=("[TRACERT+] Comando ID ${cmd.id} (${cmd.command_name || cmd.command_type}) executado com sucesso!")\n`;
-    rsc += `} on-error={\n`;
-    rsc += `    /log error message=("[TRACERT+] Falha ao executar comando ID ${cmd.id} (${cmd.command_name || cmd.command_type})")\n`;
-    rsc += `}\n\n`;
+    rsc += `# Comando ID ${cmd.id} [${cmd.command_type}] - ${cmd.command_name || 'Comando'}\n`;
+    rsc += `${cmd.payload}\n`;
+    rsc += `/log info message=("[TRACERT+] Comando ID ${cmd.id} (${cmd.command_name || cmd.command_type}) executado!");\n\n`;
 
     markExecuted.run(cmd.id);
   }
