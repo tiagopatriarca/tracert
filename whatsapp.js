@@ -36,7 +36,7 @@ export async function sendEvolutionWhatsapp(tipoNotificacao, routerId, mensagemT
 
       const endpoint = `${config.base_url.replace(/\/$/, '')}/message/sendText/${config.instance_name}`;
 
-      await fetch(endpoint, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -44,6 +44,7 @@ export async function sendEvolutionWhatsapp(tipoNotificacao, routerId, mensagemT
         },
         body: JSON.stringify({
           number: number,
+          text: mensagemTexto,
           options: {
             delay: 1200,
             presence: 'composing',
@@ -53,9 +54,14 @@ export async function sendEvolutionWhatsapp(tipoNotificacao, routerId, mensagemT
             text: mensagemTexto
           }
         })
-      }).catch(err => {
-        console.error(`[Evolution API] Erro ao enviar para ${number}:`, err.message);
       });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`[Evolution API] Erro HTTP ${response.status} ao enviar para ${number}:`, errText);
+      } else {
+        console.log(`[Evolution API] Notificação enviada com sucesso para ${number}`);
+      }
     }
   } catch (error) {
     console.error('[Evolution API] Falha geral no disparo:', error);
