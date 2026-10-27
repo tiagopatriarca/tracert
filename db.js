@@ -214,6 +214,9 @@ export function initDatabase() {
   try {
     db.exec("ALTER TABLE router_commands ADD COLUMN target_desc TEXT;");
   } catch (e) {}
+  try {
+    db.exec("ALTER TABLE routers ADD COLUMN offline_notified INTEGER DEFAULT 0;");
+  } catch (e) {}
   // Cria apenas o usuário admin inicial se zerado, sem dados fakes
   const userCheck = db.prepare('SELECT count(*) as count FROM users').get();
   if (userCheck.count === 0) {

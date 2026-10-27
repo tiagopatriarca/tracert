@@ -96,6 +96,20 @@ function getRouterByToken(token) {
   return db.prepare('SELECT * FROM routers WHERE token = ?').get(token);
 }
 
+function touchRouterSeen(router) {
+  try {
+    if (router && router.offline_notified === 1) {
+      db.prepare("UPDATE routers SET last_seen = datetime('now'), offline_notified = 0 WHERE id = ?").run(router.id);
+      const msg = `✅ *TRACERT+: MIKROTIK ONLINE*\n\n📍 *Roteador:* ${router.name}\n🟢 *Status:* Comunicação e telemetria restabelecidas!\n⏰ *Data/Hora:* ${new Date().toLocaleString('pt-BR')}`;
+      sendEvolutionWhatsapp('ROUTER_OFFLINE', router.id, msg);
+    } else if (router) {
+      db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
+    }
+  } catch (err) {
+    if (router) db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
+  }
+}
+
 // 1. Telemetria de Hardware e Sistema (/system resource e /system routerboard)
 app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) => {
   const token = req.params.token || req.query.token || (req.body && req.body.token);
@@ -114,6 +128,8 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
   const uptime = data.uptime;
   const serialNumber = data.serialNumber;
 
+  touchRouterSeen(router);
+
   db.prepare(`
     UPDATE routers SET
       model = COALESCE(?, model),
@@ -126,6 +142,7 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
       free_memory = ?,
       uptime = ?,
       serial_number = ?,
+      offline_notified = 0,
       last_seen = datetime('now')
     WHERE id = ?
   `).run(
@@ -160,7 +177,7 @@ app.post(['/api/telemetry/failover', '/api/telemetry/failover/:token'], async (r
   const router = getRouterByToken(token);
   if (!router) return res.status(401).json({ error: 'Token inválido' });
 
-  db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
+  touchRouterSeen(router);
 
   const data = { ...req.query, ...req.body };
   const linkName = data.link || data.linkName || 'LINK-WAN';
@@ -211,7 +228,7 @@ app.post(['/api/telemetry/sdwan', '/api/telemetry/sdwan/:token'], async (req, re
   const router = getRouterByToken(token);
   if (!router) return res.status(401).json({ error: 'Token inválido' });
 
-  db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
+  touchRouterSeen(router);
 
   const { nomeDestino, endereco, linkAtivo, linkAnterior, melhorRtt, melhorPerda, testes } = req.body;
   const cleanEndereco = (endereco || '').replace(/["\r\n;\\]/g, '').trim();
@@ -282,8 +299,8 @@ app.get(['/api/routers/sync', '/api/routers/sync/:token'], (req, res) => {
   const router = getRouterByToken(token);
   if (!router) return res.status(401).send('# [TRACERT+] Erro: Token invalido\n');
 
-  // Atualiza heartbeat do roteador
-  db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
+  // Atualiza heartbeat do roteador e trata retorno se estava offline
+  touchRouterSeen(router);
 
   // Busca comandos pendentes na fila
   const pending = db.prepare(`
@@ -1602,20 +1619,24 @@ app.post('/api/admin/evolution', authMiddleware, adminOnly, (req, res) => {
   res.json({ success: true });
 });
 
-// Watcher Roteadores Offline
+// Watcher Roteadores Offline (dispara apenas uma única vez na queda e não repete)
 setInterval(() => {
   try {
     const offlineRouters = db.prepare(`
       SELECT r.* FROM routers r
       WHERE datetime(r.last_seen, '+5 minutes') < datetime('now')
+        AND (r.offline_notified IS NULL OR r.offline_notified = 0)
     `).all();
 
     for (const r of offlineRouters) {
+      db.prepare("UPDATE routers SET offline_notified = 1 WHERE id = ?").run(r.id);
       const msg = `⚠️ *TRACERT+: MIKROTIK OFFLINE*\n\n📍 *Roteador:* ${r.name}\n❌ *Status:* Sem telemetria há mais de 5 minutos!\n⏰ *Último contato:* ${r.last_seen || 'Nunca'}`;
       sendEvolutionWhatsapp('ROUTER_OFFLINE', r.id, msg);
     }
-  } catch (e) {}
-}, 120000);
+  } catch (e) {
+    console.error('[Watcher Offline] Erro:', e);
+  }
+}, 60000);
 
 
 // ----------------------------------------------------------------------
