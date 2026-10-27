@@ -1,7 +1,19 @@
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+let allRouters = [];
 let authToken = localStorage.getItem('sdwan_token');
 let currentUser = JSON.parse(localStorage.getItem('sdwan_user') || 'null');
 let currentClientId = null;
 let currentRouterId = null;
+let currentView = 'dashboard';
 let chartLink1Instance = null;
 let chartLink2Instance = null;
 let lastActivityTime = Date.now();
@@ -106,6 +118,7 @@ async function apiFetch(url, options = {}) {
 }
 
 function switchView(viewName) {
+  currentView = viewName;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('main.content-body').forEach(el => el.style.display = 'none');
   const tenantFilter = document.getElementById('tenant-filter-bar');
@@ -170,7 +183,7 @@ async function carregarOverviewDashboard() {
       item.style.cssText = 'padding: 8px 10px; border-bottom: 1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;';
       item.innerHTML = `
         <div>
-          <strong style="color:#dc2626;">${l.link_name}</strong> - ${l.router_name} (${l.client_name})
+          <strong style="color:#dc2626;">${escapeHtml(l.link_name)}</strong> - ${escapeHtml(l.router_name)} (${escapeHtml(l.client_name)})
         </div>
         <div style="font-size:12px; color:#64748b;">Queda em: ${formatarData(l.last_changed)}</div>
       `;
@@ -189,7 +202,7 @@ async function carregarOverviewDashboard() {
       const color = e.status === 'UP' ? '#16a34a' : '#dc2626';
       item.innerHTML = `
         <div>
-          <strong style="color:${color};">${e.status}</strong>: ${e.link_name} em <em>${e.router_name}</em>
+          <strong style="color:${color};">${escapeHtml(e.status)}</strong>: ${escapeHtml(e.link_name)} em <em>${escapeHtml(e.router_name)}</em>
         </div>
         <div style="font-size:11.5px; color:#64748b;">${formatarData(e.created_at)}</div>
       `;
@@ -254,12 +267,28 @@ async function carregarRoteadoresDoCliente() {
     if (idx === 0) currentRouterId = r.id;
   });
 
-  carregarSDWAN();
+  atualizarViewAtiva();
+}
+
+function atualizarViewAtiva() {
+  if (currentView === 'links') {
+    carregarStatusLinks();
+  } else if (currentView === 'sdwan') {
+    carregarSDWAN();
+  } else if (currentView === 'reports') {
+    carregarRelatorioSelecionado();
+  } else if (currentView === 'dashboard') {
+    carregarOverviewDashboard();
+  } else if (currentView === 'admin') {
+    carregarAdminRouters();
+  } else {
+    carregarSDWAN();
+  }
 }
 
 function onRouterChange() {
   currentRouterId = document.getElementById('router-select').value;
-  carregarSDWAN();
+  atualizarViewAtiva();
 }
 
 // ----------------------------------------------------------------------
@@ -289,9 +318,14 @@ async function carregarSDWAN() {
     const isIts = (t.active_link || '').toUpperCase().includes('ITS');
     const linkIndicatorClass = isIts ? 'its' : 'claro';
 
+    const cleanTName = escapeHtml(t.name);
+    const cleanTAddress = escapeHtml(t.address);
+    const cleanTLink = escapeHtml(t.active_link || 'Aguardando');
+    const safeNameAttr = (t.name || '').replace(/'/g, "\\'");
+
     card.innerHTML = `
       <div class="card-header-inner">
-        <h3 class="card-title">${t.name}</h3>
+        <h3 class="card-title">${cleanTName}</h3>
         <span class="status-badge">Melhor rota estabelecida</span>
         
         <div class="card-meta-list">
@@ -299,10 +333,10 @@ async function carregarSDWAN() {
             <strong>Link:</strong> 
             <span class="link-pill">
               <span class="link-indicator ${linkIndicatorClass}"></span> 
-              ${t.active_link || 'Aguardando'}
+              ${cleanTLink}
             </span>
           </div>
-          <div><strong>Endereço:</strong> ${t.address}</div>
+          <div><strong>Endereço:</strong> ${cleanTAddress}</div>
           <div><strong>Métrica:</strong> ${t.metric_rtt ? t.metric_rtt.toFixed(2) + 'ms' : '0.00ms'}</div>
           <div><strong>Último teste:</strong> ${formatarData(t.last_tested)}</div>
         </div>
@@ -313,8 +347,8 @@ async function carregarSDWAN() {
       </div>
 
       <div class="card-actions-bar">
-        <span class="card-action-btn" onclick="abrirTimeline(${t.id}, '${t.name}')">📑 Relatório</span>
-        <span class="card-action-btn" onclick="abrirGraficos(${t.id}, '${t.name}')">📊 Rel. Detalhado</span>
+        <span class="card-action-btn" onclick="abrirTimeline(${t.id}, '${safeNameAttr}')">📑 Relatório</span>
+        <span class="card-action-btn" onclick="abrirGraficos(${t.id}, '${safeNameAttr}')">📊 Rel. Detalhado</span>
         <span class="card-action-btn" style="color:#ef4444;" onclick="excluirDestinoSDWAN(${t.id})">🗑️</span>
       </div>
     `;
@@ -530,7 +564,7 @@ async function carregarStatusLinks() {
 
     card.innerHTML = `
       <div style="flex:1; padding-right:12px;">
-        <div class="link-name-huge">${l.link_name}</div>
+        <div class="link-name-huge">${escapeHtml(l.link_name)}</div>
         <div style="font-size: 12.5px; color: var(--text-secondary); margin-top: 4px;">
           Último teste: <strong style="color:var(--text-primary);">${formatarData(l.updated_at || l.last_changed)}</strong>
         </div>
@@ -554,9 +588,9 @@ async function carregarStatusLinks() {
 
     tr.innerHTML = `
       <td style="padding: 10px;">${formatarData(e.created_at)}</td>
-      <td style="padding: 10px; font-weight: 600;">${e.link_name}</td>
-      <td style="padding: 10px; color: ${color}; font-weight: 700;">${e.status}</td>
-      <td style="padding: 10px;">${e.score}/8 pings</td>
+      <td style="padding: 10px; font-weight: 600;">${escapeHtml(e.link_name)}</td>
+      <td style="padding: 10px; color: ${color}; font-weight: 700;">${escapeHtml(e.status)}</td>
+      <td style="padding: 10px;">${escapeHtml(e.score)}/8 pings</td>
     `;
     tbody.appendChild(tr);
   });
@@ -762,6 +796,7 @@ async function excluirCliente(id) {
 async function carregarAdminRouters() {
   const res = await apiFetch('/api/routers');
   const routers = await res.json();
+  allRouters = routers;
   const tbody = document.querySelector('#admin-routers-table tbody');
   tbody.innerHTML = '';
 
@@ -774,17 +809,23 @@ async function carregarAdminRouters() {
     const fwVer = r.firmware_version ? `FW: ${r.firmware_version}` : '';
     const cpuInfo = r.cpu_load !== null && r.cpu_load !== undefined ? `CPU: ${r.cpu_load}% (${r.cpu_count || 1}x)` : 'CPU: N/A';
     const memInfo = r.total_memory ? `Mem: ${r.free_memory || 0}MB livre / ${r.total_memory}MB` : '';
+    const sdwanBadge = r.has_sdwan !== 0 
+      ? '<span style="background: #e0e7ff; color: #4338ca; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 6px;">SD-WAN</span>' 
+      : '<span style="background: #f1f5f9; color: #475569; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 6px;">1 Link (Monitor)</span>';
 
+    const cleanRouterName = (r.name || '').replace(/'/g, "\\'");
+    const cleanRouterModel = (r.model || '').replace(/'/g, "\\'");
     tr.innerHTML = `
-      <td style="padding: 10px; font-weight: 600;">${r.client_name}</td>
-      <td style="padding: 10px;">${r.name}</td>
-      <td style="padding: 10px; font-weight: 600; color: #4f46e5;">${board}</td>
-      <td style="padding: 10px; font-size: 12px; color: #334155;">${osVer} <br><span style="color:#64748b;">${fwVer}</span></td>
-      <td style="padding: 10px; font-size: 12px; color: #334155;">${cpuInfo} <br><span style="color:#64748b;">${memInfo}</span></td>
-      <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${r.token}</code></td>
+      <td style="padding: 10px; font-weight: 600;">${escapeHtml(r.client_name)}</td>
+      <td style="padding: 10px; font-weight: 600;">${escapeHtml(r.name)} ${sdwanBadge}</td>
+      <td style="padding: 10px; font-weight: 600; color: #4f46e5;">${escapeHtml(board)}</td>
+      <td style="padding: 10px; font-size: 12px; color: #334155;">${escapeHtml(osVer)} <br><span style="color:#64748b;">${escapeHtml(fwVer)}</span></td>
+      <td style="padding: 10px; font-size: 12px; color: #334155;">${escapeHtml(cpuInfo)} <br><span style="color:#64748b;">${escapeHtml(memInfo)}</span></td>
+      <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${escapeHtml(r.token)}</code></td>
       <td style="padding: 10px; text-align: right;">
+        <button onclick="copiarScriptBootstrap(${r.id}, this)" style="border:1px solid #bae6fd; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:8px; transition:all 0.2s;" title="Copiar Script de Ativação Universal para Área de Transferência">📋 Copiar Ativação</button>
         <button onclick="abrirModalOTA(${r.id})" style="border:none; background:none; color:#10b981; cursor:pointer; font-weight:600; margin-right:8px;" title="Gestão Remota e Comandos OTA">🔄 OTA</button>
-        <button onclick="editarRouter(${r.id}, ${r.client_id}, '${r.name}', '${r.model || ''}')" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
+        <button onclick="editarRouter(${r.id}, ${r.client_id}, '${cleanRouterName}', '${cleanRouterModel}', ${r.has_sdwan !== 0 ? 1 : 0})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
         <button onclick="excluirRouter(${r.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
       </td>
     `;
@@ -808,10 +849,12 @@ async function abrirModalRouter() {
   document.getElementById('router-id').value = '';
   document.getElementById('router-form-nome').value = '';
   document.getElementById('router-form-model').value = '';
+  const sdwanCheck = document.getElementById('router-form-sdwan');
+  if (sdwanCheck) sdwanCheck.checked = true;
   document.getElementById('modal-router').style.display = 'flex';
 }
 
-async function editarRouter(id, clientId, name, model) {
+async function editarRouter(id, clientId, name, model, hasSdwan) {
   const res = await apiFetch('/api/clients');
   const clients = await res.json();
   const select = document.getElementById('router-form-client');
@@ -828,6 +871,8 @@ async function editarRouter(id, clientId, name, model) {
   document.getElementById('router-id').value = id;
   document.getElementById('router-form-nome').value = name;
   document.getElementById('router-form-model').value = model;
+  const sdwanCheck = document.getElementById('router-form-sdwan');
+  if (sdwanCheck) sdwanCheck.checked = (hasSdwan !== 0 && hasSdwan !== false);
   document.getElementById('modal-router').style.display = 'flex';
 }
 
@@ -837,18 +882,20 @@ async function salvarRouter(e) {
   const clientId = document.getElementById('router-form-client').value;
   const name = document.getElementById('router-form-nome').value;
   const model = document.getElementById('router-form-model').value;
+  const sdwanCheck = document.getElementById('router-form-sdwan');
+  const has_sdwan = sdwanCheck ? (sdwanCheck.checked ? 1 : 0) : 1;
 
   if (id) {
     await apiFetch(`/api/routers/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId, name, model })
+      body: JSON.stringify({ clientId, name, model, has_sdwan })
     });
   } else {
     await apiFetch('/api/routers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId, name, model })
+      body: JSON.stringify({ clientId, name, model, has_sdwan })
     });
   }
 
@@ -1123,16 +1170,36 @@ async function excluirUsuario(id) {
 }
 
 function fecharModais() {
-  document.getElementById('modal-timeline').style.display = 'none';
-  document.getElementById('modal-graficos').style.display = 'none';
-  document.getElementById('modal-grupo').style.display = 'none';
-  document.getElementById('modal-usuario').style.display = 'none';
-  document.getElementById('modal-cliente').style.display = 'none';
-  document.getElementById('modal-router').style.display = 'none';
-  document.getElementById('modal-sdwan-destino').style.display = 'none';
-  const modalOta = document.getElementById('modal-ota');
-  if (modalOta) modalOta.style.display = 'none';
+  // Fecha universalmente qualquer modal pela classe
+  document.querySelectorAll('.timeline-modal').forEach(m => {
+    m.style.display = 'none';
+  });
+
+  // Garante o fechamento de todos os modais por ID
+  const allModalIds = [
+    'modal-timeline', 'modal-graficos', 'modal-grupo', 'modal-usuario',
+    'modal-cliente', 'modal-router', 'modal-sdwan-destino', 'modal-ota',
+    'modal-batch-details', 'modal-bootstrap'
+  ];
+  allModalIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
 }
+
+// Fecha modais ao clicar no fundo escuro (backdrop)
+window.addEventListener('click', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('timeline-modal')) {
+    fecharModais();
+  }
+});
+
+// Fecha modais ao pressionar tecla ESC
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    fecharModais();
+  }
+});
 
 function parseUtcDate(dtString) {
   if (!dtString) return null;
@@ -1165,23 +1232,30 @@ function formatarHora(dtString) {
 let otaTargetRouterId = null;
 
 async function abrirModalOTA(routerId) {
-  otaTargetRouterId = routerId || currentRouterId;
-  if (!otaTargetRouterId) {
-    if (allRouters && allRouters.length > 0) otaTargetRouterId = allRouters[0].id;
-  }
-  if (!otaTargetRouterId) return alert('Nenhum roteador selecionado');
+  try {
+    otaTargetRouterId = routerId || currentRouterId;
+    if (!otaTargetRouterId) {
+      if (allRouters && allRouters.length > 0) otaTargetRouterId = allRouters[0].id;
+    }
+    if (!otaTargetRouterId) return alert('Nenhum roteador selecionado');
 
-  const router = allRouters.find(r => r.id === otaTargetRouterId);
-  const routerName = router ? router.name : 'Roteador ' + otaTargetRouterId;
-  const token = router ? router.token : '';
+    if (!allRouters || allRouters.length === 0) {
+      const res = await apiFetch('/api/routers');
+      allRouters = await res.json();
+    }
 
-  document.getElementById('ota-router-subtitle').innerText = `Roteador: ${routerName} (Token: ${token})`;
-  
-  const agentScript = `/system script remove [find name="tracert_sync"]
+    const router = (allRouters || []).find(r => Number(r.id) === Number(otaTargetRouterId));
+    const routerName = router ? router.name : 'Roteador #' + otaTargetRouterId;
+    const token = router ? router.token : '';
+
+    const subtitleEl = document.getElementById('ota-router-subtitle');
+    if (subtitleEl) subtitleEl.innerText = `Roteador: ${routerName} (Token: ${token})`;
+
+    const agentScript = `/system script remove [find name="tracert_sync"]
 /system script add dont-require-permissions=no name="tracert_sync" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
-    :local syncUrl "https://tracert.tiplus.inf.br/api/routers/sync?token=${token}"
+    :local syncUrl "https://tracert.tiplus.inf.br/api/routers/sync/${token}"
     :do {
-        /tool fetch url=$syncUrl dst-path="tracert_sync.rsc" keep-result=yes
+        /tool fetch check-certificate=no url=$syncUrl dst-path="tracert_sync.rsc" keep-result=yes
         :local f [/file find name="tracert_sync.rsc"]
         :if ([:len $f] > 0) do={
             :local sz [/file get $f size]
@@ -1196,9 +1270,16 @@ async function abrirModalOTA(routerId) {
 /system scheduler remove [find name="executa_tracert_sync"]
 /system scheduler add interval=1m name="executa_tracert_sync" on-event="tracert_sync" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup`;
 
-  document.getElementById('ota-agent-code').innerText = agentScript;
-  document.getElementById('modal-ota').style.display = 'flex';
-  carregarHistoricoOTA();
+    const codeEl = document.getElementById('ota-agent-code');
+    if (codeEl) codeEl.innerText = agentScript;
+
+    const modalEl = document.getElementById('modal-ota');
+    if (modalEl) modalEl.style.display = 'flex';
+    carregarHistoricoOTA();
+  } catch (err) {
+    console.error('Erro ao abrir modal OTA:', err);
+    alert('Erro ao abrir OTA: ' + err.message);
+  }
 }
 
 function alternarInstrucoesAgente() {
@@ -1272,6 +1353,19 @@ async function sincronizarDestinosRB() {
   }
 }
 
+async function enviarFailoverOTA() {
+  if (!otaTargetRouterId) return;
+  if (!confirm('Deseja enviar o script oficial de Failover Multi-Link (v8 - Modelo Bendito) para esta RouterBoard?\n\nEle será executado no próximo ciclo de sincronização OTA (< 1 min).')) return;
+  try {
+    const res = await apiFetch(`/api/routers/${otaTargetRouterId}/failover`, { method: 'POST' });
+    const data = await res.json();
+    alert(data.message || 'Script de Failover enfileirado com sucesso para a RB!');
+    carregarHistoricoOTA();
+  } catch(e) {
+    alert('Erro ao enfileirar failover: ' + e.message);
+  }
+}
+
 async function enviarOtaUpdateScript() {
   if (!otaTargetRouterId) return;
   if (!confirm('Deseja enviar a atualização completa do script SD-WAN (v4.1) via OTA para esta RouterBoard?')) return;
@@ -1311,5 +1405,429 @@ async function cancelarComandoOTA(id) {
     carregarHistoricoOTA();
   } catch(e) {
     alert('Erro: ' + e.message);
+  }
+}
+
+
+// ----------------------------------------------------------------------
+// GESTÃO DE SUB-ABAS EM ADMINISTRAÇÃO E COMANDOS EM MASSA (OTA)
+// ----------------------------------------------------------------------
+function switchAdminSubtab(subtab) {
+  const tabs = ['routers', 'commands', 'clients', 'evolution', 'access'];
+  tabs.forEach(t => {
+    const el = document.getElementById(`admin-subtab-${t}`);
+    const btn = document.getElementById(`admin-subtab-${t}-btn`);
+    if (el) el.style.display = (t === subtab) ? 'block' : 'none';
+    if (btn) {
+      if (t === subtab) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
+  });
+
+  if (subtab === 'commands') {
+    carregarHistoricoLotesMassa();
+    carregarOpcoesSelecaoManual();
+  }
+}
+
+async function carregarOpcoesSelecaoManual() {
+  const res = await apiFetch('/api/routers');
+  const routers = await res.json();
+  const container = document.getElementById('bcmd-routers-list');
+  if (!container) return;
+  container.innerHTML = '';
+
+  routers.forEach(r => {
+    const label = document.createElement('label');
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.gap = '6px';
+    label.style.fontSize = '12px';
+    label.style.cursor = 'pointer';
+    label.style.background = '#ffffff';
+    label.style.padding = '6px 8px';
+    label.style.borderRadius = '4px';
+    label.style.border = '1px solid var(--border-color)';
+
+    const tag = r.has_sdwan !== 0 ? '🔀 SD-WAN' : '📶 1 Link';
+    label.innerHTML = `
+      <input type="checkbox" class="bcmd-router-chk" value="${r.id}" checked>
+      <span style="font-weight: 600; color: #1e293b;">${r.name}</span>
+      <span style="color: #64748b; font-size: 11px;">(${tag})</span>
+    `;
+    container.appendChild(label);
+  });
+}
+
+function aoMudarFiltroDestinatarios() {
+  const filter = document.getElementById('bcmd-target-filter').value;
+  const manualBox = document.getElementById('bcmd-manual-box');
+  if (manualBox) {
+    manualBox.style.display = (filter === 'SELECTED') ? 'block' : 'none';
+  }
+}
+
+function marcarTodosRoutersMassa(marcar) {
+  document.querySelectorAll('.bcmd-router-chk').forEach(chk => chk.checked = marcar);
+}
+
+function aplicarTemplateMassa(template) {
+  const textarea = document.getElementById('bcmd-script');
+  const nameInput = document.getElementById('bcmd-name');
+  if (!textarea) return;
+
+  if (template === 'failover') {
+    if (nameInput) nameInput.value = 'Configuração Failover Multi-Link (Bendito v8)';
+    textarea.value = `# =======================================================================
+# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL v8 UNIVERSAL)
+# =======================================================================
+
+# 1. Limpeza segura de regras anteriores
+:foreach r in=[/ip route find comment~"!=="] do={ :do { /ip route remove $r } on-error={} }
+:do { :foreach r in=[/routing rule find comment~"!=="] do={ :do { /routing rule remove $r } on-error={} } } on-error={}
+:do { :foreach r in=[/ip route rule find comment~"!=="] do={ :do { /ip route rule remove $r } on-error={} } } on-error={}
+:do { /system script remove [find name="failover"] } on-error={}
+:do { /system scheduler remove [find name="executa script failover"] } on-error={}
+
+# 2. Setup dinâmico de tabelas e rotas de teste
+:foreach i in=[/ip route find dst-address=0.0.0.0/0 routing-mark<>""] do={
+    :local gw [/ip route get $i gateway]
+    :local cmt [/ip route get $i comment]
+
+    :if ([:len $cmt] > 0) do={
+        :local safeCmt ""
+        :for idx from=0 to=([:len $cmt] - 1) do={
+            :local char [:pick $cmt $idx ($idx + 1)]
+            :if ($char = " ") do={ :set char "-" }
+            :set safeCmt ($safeCmt . $char)
+        }
+
+        :local tabName ("rota-de-teste-para-" . $safeCmt)
+
+        :do {
+            /routing table add name=$tabName fib
+        } on-error={}
+
+        :do {
+            /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-table=$tabName comment=("!== Rota de teste para " . $cmt)
+        } on-error={
+            /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-mark=$tabName comment=("!== Rota de teste para " . $cmt)
+        }
+
+        :do {
+            /routing rule add action=lookup-only-in-table routing-mark=$tabName table=$tabName comment=("!== Force teste para o failover ==> " . $cmt)
+        } on-error={
+            :do { /ip route rule add action=lookup-only-in-table routing-mark=$tabName table=$tabName comment=("!== Force teste para o failover ==> " . $cmt) } on-error={}
+        }
+    }
+}
+
+# 3. Criação de Ação Padrão de Failover se não existir
+:if ([:len [/system script find name="FAILOVER_ACTIONS"]] = 0) do={
+    /system script add name="FAILOVER_ACTIONS" source={
+        :global foLinkName
+        :global foLinkStatus
+        :global foPingScore
+        :log warning message=("[TRACERT+ FAILOVER] Link " . $foLinkName . " mudou de estado para: " . $foLinkStatus . " (Score: " . $foPingScore . ")")
+    }
+}
+
+# 4. Script de monitoramento de Failover
+/system script add dont-require-permissions=no name="failover" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local IPsParaTeste [:toarray "8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8"]
+    :local NumeroDePings 2
+    :local Intervalo 00:00:00.5
+    :local ScoreMinimoUP 3
+
+    :global foRouterName [/system identity get name]
+    :global foLinkName
+    :global foLinkStatus
+    :global foPingScore
+
+    :local totalRotasAtivas [/ip route print count-only where dst-address=0.0.0.0/0 routing-mark<>"" disabled=no comment!~"!=="]
+
+    :foreach i in=[/ip route find dst-address=0.0.0.0/0 routing-mark<>""] do={
+        :local cmt [/ip route get $i comment]
+        :if ([:len $cmt] > 0 and !($cmt ~ "!==")) do={
+            :delay 1
+            :local safeCmt ""
+            :for idx from=0 to=([:len $cmt] - 1) do={
+                :local char [:pick $cmt $idx ($idx + 1)]
+                :if ($char = " ") do={ :set char "-" }
+                :set safeCmt ($safeCmt . $char)
+            }
+            :local TabRoteAtual ("rota-de-teste-para-" . $safeCmt)
+            :local scoreAtual 0
+            :foreach ip in=$IPsParaTeste do={
+                :local res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual]
+                :set scoreAtual ($scoreAtual + $res)
+            }
+            :local isDis [/ip route get $i disabled]
+            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={
+                :if ($totalRotasAtivas > 1) do={
+                    /ip route disable [find comment=$cmt and !comment~"!=="]
+                    :set totalRotasAtivas ($totalRotasAtivas - 1)
+                    :set foLinkName $cmt
+                    :set foLinkStatus "DOWN"
+                    :set foPingScore $scoreAtual
+                    :do { /system script run FAILOVER_ACTIONS } on-error={}
+                } else={
+                    /log warning message=("[FAILOVER] Link " . $cmt . " falhou, mantido ativo por ser o unico!")
+                }
+            }
+            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={
+                /ip route enable [find comment=$cmt and !comment~"!=="]
+                :set totalRotasAtivas ($totalRotasAtivas + 1)
+                :set foLinkName $cmt
+                :set foLinkStatus "UP"
+                :set foPingScore $scoreAtual
+                :do { /system script run FAILOVER_ACTIONS } on-error={}
+            }
+        }
+    }
+}
+
+# 5. Agendador (a cada 30 segundos)
+/system scheduler add interval=30s name="executa script failover" on-event="failover" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+:log info message="[TRACERT+] Failover Multi-Link v8 provisionado com sucesso!";`;
+  } else if (template === 'ntp') {
+    if (nameInput) nameInput.value = 'Configuração NTP Brasil (pool.ntp.br)';
+    textarea.value = `/system clock set time-zone-name=America/Fortaleza;\n/system ntp client set enabled=yes primary-ntp=200.160.7.186 secondary-ntp=200.189.40.8;\n:log info message="[TRACERT+] NTP e fuso horário configurados com sucesso!";`;
+  } else if (template === 'dns') {
+    if (nameInput) nameInput.value = 'Atualização DNS Primário (Cloudflare / Google)';
+    textarea.value = `/ip dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=no;\n/ip dns cache flush;\n:log info message="[TRACERT+] Servidores DNS atualizados para 1.1.1.1 e 8.8.8.8";`;
+  } else if (template === 'flush_dns') {
+    if (nameInput) nameInput.value = 'Limpeza de Cache DNS';
+    textarea.value = `/ip dns cache flush;\n:log info message="[TRACERT+] Cache DNS limpo com sucesso!";`;
+  } else if (template === 'telemetry') {
+    if (nameInput) nameInput.value = 'Forçar Envio Imediato de Telemetria';
+    textarea.value = `/system script run tracert_system_telemetry;\n:log info message="[TRACERT+] Telemetria forçada pelo administrador.";`;
+  } else if (template === 'reboot') {
+    if (nameInput) nameInput.value = 'Reinicialização Remota do Equipamento';
+    textarea.value = `:log warning message="[TRACERT+] Reinicializando equipamento sob demanda via nuvem...";\n/system reboot;`;
+  } else if (template === 'clear') {
+    if (nameInput) nameInput.value = '';
+    textarea.value = '';
+  }
+}
+
+async function dispararComandoMassa(e) {
+  e.preventDefault();
+  const targetFilter = document.getElementById('bcmd-target-filter').value;
+  const commandName = document.getElementById('bcmd-name').value;
+  const script = document.getElementById('bcmd-script').value;
+
+  let selectedRouterIds = [];
+  if (targetFilter === 'SELECTED') {
+    document.querySelectorAll('.bcmd-router-chk:checked').forEach(chk => {
+      selectedRouterIds.push(parseInt(chk.value));
+    });
+    if (selectedRouterIds.length === 0) {
+      return alert('Selecione pelo menos um roteador na lista.');
+    }
+  }
+
+  const confirmMsg = `Deseja realmente disparar o comando "${commandName}" para os roteadores selecionados?\n\nOs roteadores buscarão e executarão o comando no próximo ciclo de sincronização (até 1 minuto).`;
+  if (!confirm(confirmMsg)) return;
+
+  const btn = document.getElementById('btn-disparar-massa');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await apiFetch('/api/admin/commands/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetFilter, selectedRouterIds, commandName, script })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'Erro ao disparar comandos em massa');
+      return;
+    }
+
+    alert(`Sucesso! Comando disparado para ${data.totalQueued} roteadores.\nLote ID: ${data.batchId}`);
+    document.getElementById('bcmd-script').value = '';
+    document.getElementById('bcmd-name').value = '';
+    carregarHistoricoLotesMassa();
+  } catch (err) {
+    alert('Erro de conexão ao enviar comandos: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function carregarHistoricoLotesMassa() {
+  const res = await apiFetch('/api/admin/commands/batches');
+  if (!res.ok) return;
+  const batches = await res.json();
+  const tbody = document.querySelector('#admin-batch-commands-table tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (batches.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">Nenhum comando em massa disparado ainda.</td></tr>`;
+    return;
+  }
+
+  batches.forEach(b => {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--border-color)';
+
+    const total = b.total_routers || 0;
+    const executed = b.executed_count || 0;
+    const pending = b.pending_count || 0;
+    const cancelled = b.cancelled_count || 0;
+    const percent = total > 0 ? Math.round((executed / total) * 100) : 0;
+
+    let statusHtml = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="flex: 1; background: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden; max-width: 120px;">
+          <div style="width: ${percent}%; background: ${percent === 100 ? '#10b981' : '#0284c7'}; height: 100%;"></div>
+        </div>
+        <span style="font-weight: 600; font-size: 12px; color: ${percent === 100 ? '#059669' : '#0284c7'};">${percent}%</span>
+        <span style="font-size: 11px; color: #64748b;">(${executed}/${total})</span>
+      </div>
+    `;
+
+    const d = new Date(b.created_at);
+    const dataFormatada = d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+    const safeCmdName = (b.command_name || '').replace(/'/g, "\\'");
+    tr.innerHTML = `
+      <td style="padding: 10px; color: #64748b; font-size: 12.5px;">${dataFormatada}</td>
+      <td style="padding: 10px; font-weight: 600; color: #1e293b;">${escapeHtml(b.command_name)}</td>
+      <td style="padding: 10px;"><span style="background: #f1f5f9; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">${total} MikroTiks</span></td>
+      <td style="padding: 10px;">${statusHtml}</td>
+      <td style="padding: 10px; text-align: right;">
+        <button onclick="verDetalhesLote('${b.batch_id}', '${safeCmdName}', '${b.created_at}')" style="border:none; background:none; color:#0284c7; cursor:pointer; font-weight:600; margin-right:8px;" title="Ver Status Detalhado">🔍 Detalhes</button>
+        ${pending > 0 ? `<button onclick="cancelarLotePendente('${b.batch_id}')" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;" title="Cancelar Pendentes">❌ Cancelar</button>` : ''}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function verDetalhesLote(batchId, cmdName, createdAt) {
+  const res = await apiFetch(`/api/admin/commands/batches/${batchId}`);
+  if (!res.ok) return alert('Erro ao carregar detalhes do lote');
+  const items = await res.json();
+
+  document.getElementById('batch-modal-cmd-name').innerText = cmdName;
+  document.getElementById('batch-modal-created').innerText = formatarData(createdAt);
+
+  const total = items.length;
+  const executed = items.filter(i => i.status === 'EXECUTED').length;
+  document.getElementById('batch-modal-stats').innerText = `${executed} de ${total} executados com sucesso`;
+
+  const tbody = document.querySelector('#batch-routers-detail-table tbody');
+  tbody.innerHTML = '';
+
+  items.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--border-color)';
+
+    let badgeStatus = `<span style="background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:11px;">PENDENTE</span>`;
+    if (item.status === 'EXECUTED') {
+      badgeStatus = `<span style="background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:11px;">EXECUTADO</span>`;
+    } else if (item.status === 'FETCHED') {
+      badgeStatus = `<span style="background:#e0f2fe; color:#0369a1; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:11px;">BAIXADO</span>`;
+    } else if (item.status === 'CANCELLED') {
+      badgeStatus = `<span style="background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:11px;">CANCELADO</span>`;
+    }
+
+    const execTime = item.executed_at ? formatarData(item.executed_at) : '-';
+    const tagSdwan = item.has_sdwan !== 0 ? 'SD-WAN' : '1 Link';
+
+    tr.innerHTML = `
+      <td style="padding: 8px 10px;"><b>${escapeHtml(item.client_name)}</b><br><span style="color:#64748b;">${escapeHtml(item.router_name)}</span></td>
+      <td style="padding: 8px 10px; font-size: 11.5px; color:#475569;">${escapeHtml(item.model || 'MikroTik')}<br><span style="color:#64748b;">${escapeHtml(item.routeros_version || 'ROS')} (${tagSdwan})</span></td>
+      <td style="padding: 8px 10px;">${badgeStatus}</td>
+      <td style="padding: 8px 10px; color:#64748b; font-size: 12px;">${execTime}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  if (items.length > 0) {
+    // Buscar script
+    const sampleBatch = await apiFetch('/api/admin/commands/batches');
+    const bList = await sampleBatch.json();
+    const curr = bList.find(b => b.batch_id === batchId);
+    document.getElementById('batch-modal-script').innerText = curr ? curr.payload : 'Script não disponível';
+  }
+
+  document.getElementById('modal-batch-details').style.display = 'flex';
+}
+
+async function cancelarLotePendente(batchId) {
+  if (confirm('Deseja cancelar os comandos pendentes deste lote para todos os roteadores que ainda não o executaram?')) {
+    const res = await apiFetch(`/api/admin/commands/batches/${batchId}/cancel`, { method: 'POST' });
+    const data = await res.json();
+    alert(`Cancelados ${data.cancelled} comandos pendentes.`);
+    carregarHistoricoLotesMassa();
+  }
+}
+
+
+// ----------------------------------------------------------------------
+// SCRIPT DE ATIVAÇÃO 1-TOUCH (COPIAR DIRETO)
+// ----------------------------------------------------------------------
+async function copiarScriptBootstrap(routerId, btnElement) {
+  try {
+    const res = await apiFetch(`/api/routers/${routerId}/bootstrap`);
+    if (!res.ok) {
+      const err = await res.json();
+      return alert('Erro ao carregar script de ativação: ' + (err.error || res.statusText));
+    }
+    const data = await res.json();
+    const script = data.script;
+
+    let copiado = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(script);
+        copiado = true;
+      } catch (e) {}
+    }
+
+    if (!copiado) {
+      const ta = document.createElement('textarea');
+      ta.value = script;
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      copiado = document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+
+    // Feedback visual no botão
+    if (btnElement) {
+      const originalText = btnElement.innerHTML;
+      const originalBg = btnElement.style.background;
+      const originalColor = btnElement.style.color;
+      const originalBorder = btnElement.style.borderColor;
+
+      btnElement.innerHTML = '✅ Copiado!';
+      btnElement.style.background = '#dcfce7';
+      btnElement.style.color = '#166534';
+      btnElement.style.borderColor = '#86efac';
+
+      setTimeout(() => {
+        btnElement.innerHTML = originalText;
+        btnElement.style.background = originalBg;
+        btnElement.style.color = originalColor;
+        btnElement.style.borderColor = originalBorder;
+      }, 3500);
+    }
+
+    // Aviso em destaque para o usuário
+    alert(`✅ SCRIPT DE ATIVAÇÃO COPIADO COM SUCESSO!\n\nRoteador: ${data.router.name}\nToken: ${data.router.token}\n\nO script universal (v6/v7) já está na sua área de transferência.\nBasta abrir o Terminal do MikroTik (Winbox ou SSH) e colar (Ctrl+V).`);
+
+  } catch (err) {
+    alert('Erro ao processar ativação: ' + err.message);
   }
 }

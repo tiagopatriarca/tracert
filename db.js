@@ -205,6 +205,15 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_router_commands_pending ON router_commands(router_id, status);
   `);
 
+  try {
+    db.exec("ALTER TABLE routers ADD COLUMN has_sdwan INTEGER DEFAULT 1;");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE router_commands ADD COLUMN batch_id TEXT;");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE router_commands ADD COLUMN target_desc TEXT;");
+  } catch (e) {}
   // Cria apenas o usuário admin inicial se zerado, sem dados fakes
   const userCheck = db.prepare('SELECT count(*) as count FROM users').get();
   if (userCheck.count === 0) {

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db, initDatabase } from './db.js';
@@ -12,11 +13,28 @@ const __dirname = path.dirname(__filename);
 
 initDatabase();
 
-const JWT_SECRET = 'TRACERT_PLUS_SECRET_KEY_2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'TRACERT_PLUS_SECRET_KEY_2026_SECURE_NODE_TI';
 const app = express();
+
+// Middleware de Segurança (Anti-Clickjacking, Prevenção de MIME Sniffing, Referrer Policy)
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.warn('[TRACERT+] JSON malformado recebido:', err.message);
+    req.body = {};
+    return next();
+  }
+  next(err);
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 function authMiddleware(req, res, next) {
@@ -32,6 +50,13 @@ function authMiddleware(req, res, next) {
   }
 }
 
+function adminOnly(req, res, next) {
+  if (!req.user || req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Acesso negado: Requer privilégios de Administrador' });
+  }
+  next();
+}
+
 // ----------------------------------------------------------------------
 // LOGIN
 // ----------------------------------------------------------------------
@@ -42,7 +67,7 @@ app.post('/api/auth/login', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!user) return res.status(401).json({ error: 'Credenciais inválidas' });
 
-  const valid = (password === 'admin123') || bcrypt.compareSync(password, user.password_hash);
+  const valid = bcrypt.compareSync(password, user.password_hash);
   if (!valid) return res.status(401).json({ error: 'Credenciais inválidas' });
 
   const token = jwt.sign(
@@ -72,16 +97,22 @@ function getRouterByToken(token) {
 }
 
 // 1. Telemetria de Hardware e Sistema (/system resource e /system routerboard)
-app.post('/api/telemetry/system', (req, res) => {
-  const token = req.query.token || req.body.token;
+app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) => {
+  const token = req.params.token || req.query.token || (req.body && req.body.token);
   const router = getRouterByToken(token);
   if (!router) return res.status(401).json({ error: 'Token inválido' });
 
-  const {
-    model, routerosVersion, firmwareVersion,
-    cpuModel, cpuCount, cpuLoad,
-    totalMemory, freeMemory, uptime, serialNumber
-  } = req.body;
+  const data = { ...req.query, ...req.body };
+  const model = data.model;
+  const routerosVersion = data.routerosVersion;
+  const firmwareVersion = data.firmwareVersion;
+  const cpuModel = data.cpuModel;
+  const cpuCount = data.cpuCount;
+  const cpuLoad = data.cpuLoad;
+  const totalMemory = data.totalMemory;
+  const freeMemory = data.freeMemory;
+  const uptime = data.uptime;
+  const serialNumber = data.serialNumber;
 
   db.prepare(`
     UPDATE routers SET
@@ -98,27 +129,43 @@ app.post('/api/telemetry/system', (req, res) => {
       last_seen = datetime('now')
     WHERE id = ?
   `).run(
-    model, routerosVersion, firmwareVersion,
-    cpuModel, cpuCount || 1, cpuLoad || 0,
-    totalMemory || 0, freeMemory || 0, uptime, serialNumber,
+    model ?? null, routerosVersion ?? null, firmwareVersion ?? null,
+    cpuModel ?? null, (cpuCount !== undefined && cpuCount !== null) ? Number(cpuCount) : 1, (cpuLoad !== undefined && cpuLoad !== null) ? Number(cpuLoad) : 0,
+    (totalMemory !== undefined && totalMemory !== null) ? Number(totalMemory) : 0, (freeMemory !== undefined && freeMemory !== null) ? Number(freeMemory) : 0, uptime ?? null, serialNumber ?? null,
     router.id
   );
+
+    // Auto-provisionamento inicial: se for primeira conexão da RB, agenda SD-WAN apropriado (v6 ou v7) e destinos
+  const existingCmds = db.prepare('SELECT count(*) as count FROM router_commands WHERE router_id = ?').get(router.id);
+  if (existingCmds && existingCmds.count === 0) {
+    try {
+      const updatedRouter = db.prepare('SELECT * FROM routers WHERE id = ?').get(router.id);
+      const isV6 = isRouterOSv6(updatedRouter);
+      const otaScript = generateOtaSdwanScript(updatedRouter);
+      enqueueCommand(router.id, 'OTA_SDWAN', `Auto-Provisionamento Script SD-WAN (${isV6 ? 'v6' : 'v7'})`, otaScript);
+      const syncTargets = generateSyncTargetsScript(router.id);
+      enqueueCommand(router.id, 'SYNC_TARGETS', 'Auto-Provisionamento Destinos SD-WAN', syncTargets);
+      console.log(`[TRACERT+] Auto-provisionamento agendado para ${router.name} (RouterOS ${isV6 ? 'v6' : 'v7'})`);
+    } catch (err) {
+      console.error('[TRACERT+] Erro no auto-provisionamento:', err);
+    }
+  }
 
   res.json({ success: true, router: router.name });
 });
 
 // 2. Failover Link ON/OFF
-app.post('/api/telemetry/failover', async (req, res) => {
-  const token = req.query.token || req.body.token;
+app.post(['/api/telemetry/failover', '/api/telemetry/failover/:token'], async (req, res) => {
+  const token = req.params.token || req.query.token || (req.body && req.body.token);
   const router = getRouterByToken(token);
   if (!router) return res.status(401).json({ error: 'Token inválido' });
 
   db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
 
-  const { link, status, score } = req.body;
-  const linkName = link || req.body.linkName;
-  const linkStatus = (status || 'UP').toUpperCase();
-  const pingScore = parseInt(score || 0, 10);
+  const data = { ...req.query, ...req.body };
+  const linkName = data.link || data.linkName || 'LINK-WAN';
+  const linkStatus = (data.status || 'UP').toUpperCase();
+  const pingScore = parseInt(data.score || 8, 10);
 
   const prev = db.prepare('SELECT status, last_changed FROM link_statuses WHERE router_id = ? AND link_name = ?').get(router.id, linkName);
   const statusMudou = !prev || prev.status !== linkStatus;
@@ -159,17 +206,20 @@ app.post('/api/telemetry/failover', async (req, res) => {
 });
 
 // 3. SD-WAN Telemetria
-app.post('/api/telemetry/sdwan', async (req, res) => {
-  const token = req.query.token || req.body.token;
+app.post(['/api/telemetry/sdwan', '/api/telemetry/sdwan/:token'], async (req, res) => {
+  const token = req.params.token || req.query.token || req.body.token;
   const router = getRouterByToken(token);
   if (!router) return res.status(401).json({ error: 'Token inválido' });
 
   db.prepare("UPDATE routers SET last_seen = datetime('now') WHERE id = ?").run(router.id);
 
   const { nomeDestino, endereco, linkAtivo, linkAnterior, melhorRtt, melhorPerda, testes } = req.body;
-  if (!endereco) return res.status(400).json({ error: 'endereco obrigatorio' });
+  const cleanEndereco = (endereco || '').replace(/["\r\n;\\]/g, '').trim();
+  if (!cleanEndereco || !/^[a-zA-Z0-9.:_/-]+$/.test(cleanEndereco)) {
+    return res.status(400).json({ error: 'endereco obrigatorio e deve ser IP ou host valido' });
+  }
 
-  const name = nomeDestino || endereco;
+  const name = (nomeDestino || cleanEndereco).replace(/["\r\n;\\]/g, '').trim();
   const rtt = parseFloat(melhorRtt || 0);
   const loss = parseFloat(melhorPerda || 0);
 
@@ -182,9 +232,9 @@ app.post('/api/telemetry/sdwan', async (req, res) => {
       metric_rtt = excluded.metric_rtt,
       metric_loss = excluded.metric_loss,
       last_tested = datetime('now')
-  `).run(router.id, name, endereco, linkAtivo, rtt, loss);
+  `).run(router.id, name, cleanEndereco, linkAtivo, rtt, loss);
 
-  const target = db.prepare('SELECT id FROM sdwan_targets WHERE router_id = ? AND address = ?').get(router.id, endereco);
+  const target = db.prepare('SELECT id FROM sdwan_targets WHERE router_id = ? AND address = ?').get(router.id, cleanEndereco);
 
   if (Array.isArray(testes)) {
     const insertMetric = db.prepare("INSERT INTO sdwan_metrics (target_id, link_name, rtt, loss, tested_at) VALUES (?, ?, ?, ?, datetime('now'))");
@@ -225,8 +275,8 @@ app.post('/api/telemetry/sdwan', async (req, res) => {
 });
 
 // 4. Sincronização e Execução de Comandos Remotos OTA (Modelo 2)
-app.get('/api/routers/sync', (req, res) => {
-  const token = req.query.token;
+app.get(['/api/routers/sync', '/api/routers/sync/:token'], (req, res) => {
+  const token = req.params.token || req.query.token;
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   if (!token) return res.status(401).send('# [TRACERT+] Erro: Token obrigatorio\n');
   const router = getRouterByToken(token);
@@ -346,20 +396,20 @@ app.get('/api/clients', authMiddleware, (req, res) => {
   res.json(clients);
 });
 
-app.post('/api/clients', authMiddleware, (req, res) => {
+app.post('/api/clients', authMiddleware, adminOnly, (req, res) => {
   const { name, description } = req.body;
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório' });
   const result = db.prepare('INSERT INTO clients (name, description) VALUES (?, ?)').run(name, description || '');
   res.json({ id: result.lastInsertRowid, name, description });
 });
 
-app.put('/api/clients/:id', authMiddleware, (req, res) => {
+app.put('/api/clients/:id', authMiddleware, adminOnly, (req, res) => {
   const { name, description } = req.body;
   db.prepare('UPDATE clients SET name = ?, description = ? WHERE id = ?').run(name, description || '', req.params.id);
   res.json({ success: true });
 });
 
-app.delete('/api/clients/:id', authMiddleware, (req, res) => {
+app.delete('/api/clients/:id', authMiddleware, adminOnly, (req, res) => {
   db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -390,23 +440,24 @@ app.get('/api/routers', authMiddleware, (req, res) => {
   res.json(db.prepare(query).all(...params));
 });
 
-app.post('/api/routers', authMiddleware, (req, res) => {
-  const { clientId, name, model } = req.body;
+app.post('/api/routers', authMiddleware, adminOnly, (req, res) => {
+  const { clientId, name, model, has_sdwan } = req.body;
   if (!clientId || !name) return res.status(400).json({ error: 'Cliente e Nome são obrigatórios' });
 
-  // Gera token amigável e único
-  const token = 'MK-' + Math.random().toString(36).substring(2, 7).toUpperCase() + '-' + Date.now().toString().slice(-4);
-  const result = db.prepare('INSERT INTO routers (client_id, name, token, model) VALUES (?, ?, ?, ?)').run(clientId, name, token, model || 'RouterOS');
-  res.json({ id: result.lastInsertRowid, clientId, name, token, model });
+  const sdwanFlag = (has_sdwan === 0 || has_sdwan === false || has_sdwan === '0') ? 0 : 1;
+  const token = 'MK-' + crypto.randomBytes(8).toString('hex').toUpperCase();
+  const result = db.prepare('INSERT INTO routers (client_id, name, token, model, has_sdwan) VALUES (?, ?, ?, ?, ?)').run(clientId, name, token, model || 'RouterOS', sdwanFlag);
+  res.json({ id: result.lastInsertRowid, clientId, name, token, model, has_sdwan: sdwanFlag });
 });
 
-app.put('/api/routers/:id', authMiddleware, (req, res) => {
-  const { clientId, name, model } = req.body;
-  db.prepare('UPDATE routers SET client_id = ?, name = ?, model = ? WHERE id = ?').run(clientId, name, model, req.params.id);
+app.put('/api/routers/:id', authMiddleware, adminOnly, (req, res) => {
+  const { clientId, name, model, has_sdwan } = req.body;
+  const sdwanFlag = (has_sdwan === 0 || has_sdwan === false || has_sdwan === '0') ? 0 : 1;
+  db.prepare('UPDATE routers SET client_id = ?, name = ?, model = ?, has_sdwan = ? WHERE id = ?').run(clientId, name, model, sdwanFlag, req.params.id);
   res.json({ success: true });
 });
 
-app.delete('/api/routers/:id', authMiddleware, (req, res) => {
+app.delete('/api/routers/:id', authMiddleware, adminOnly, (req, res) => {
   db.prepare('DELETE FROM routers WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -426,28 +477,34 @@ app.get('/api/routers/:id/sdwan', authMiddleware, (req, res) => {
 });
 
 // Criar destino SD-WAN pelo painel
-app.post('/api/routers/:id/sdwan', authMiddleware, (req, res) => {
+app.post('/api/routers/:id/sdwan', authMiddleware, adminOnly, (req, res) => {
   const routerId = req.params.id;
   const { name, address } = req.body;
   if (!name || !address) return res.status(400).json({ error: 'Nome e Endereço são obrigatórios' });
+
+  const cleanAddress = (address || '').replace(/["\r\n;\\]/g, '').trim();
+  if (!cleanAddress || !/^[a-zA-Z0-9.:_/-]+$/.test(cleanAddress)) {
+    return res.status(400).json({ error: 'Endereço inválido. Informe um IP ou Hostname válido.' });
+  }
+  const cleanName = (name || cleanAddress).replace(/["\r\n;\\]/g, '').trim();
 
   const result = db.prepare(`
     INSERT INTO sdwan_targets (router_id, name, address, active_link, metric_rtt, metric_loss, last_tested)
     VALUES (?, ?, ?, 'Aguardando', 0, 0, datetime('now'))
     ON CONFLICT(router_id, address) DO UPDATE SET name = excluded.name
-  `).run(routerId, name, address);
+  `).run(routerId, cleanName, cleanAddress);
 
   try {
     const syncScript = generateSyncTargetsScript(routerId);
-    enqueueCommand(routerId, 'SYNC_TARGETS', 'Auto-Sync: Novo Destino ' + name, syncScript);
+    enqueueCommand(routerId, 'SYNC_TARGETS', 'Auto-Sync: Novo Destino ' + cleanName, syncScript);
   } catch (err) {
     console.error('Falha ao auto-enfileirar sync de destino:', err);
   }
 
-  res.json({ id: result.lastInsertRowid, name, address });
+  res.json({ id: result.lastInsertRowid, name: cleanName, address: cleanAddress });
 });
 
-app.delete('/api/sdwan/:targetId', authMiddleware, (req, res) => {
+app.delete('/api/sdwan/:targetId', authMiddleware, adminOnly, (req, res) => {
   const target = db.prepare('SELECT router_id, name FROM sdwan_targets WHERE id = ?').get(req.params.targetId);
   db.prepare('DELETE FROM sdwan_targets WHERE id = ?').run(req.params.targetId);
   if (target) {
@@ -473,14 +530,48 @@ app.get('/api/sdwan/:targetId/timeline', authMiddleware, (req, res) => {
 app.get('/api/sdwan/:targetId/metrics', authMiddleware, (req, res) => {
   const targetId = req.params.targetId;
   const target = db.prepare('SELECT * FROM sdwan_targets WHERE id = ?').get(targetId);
-  const metrics = db.prepare('SELECT link_name, rtt, loss, tested_at FROM sdwan_metrics WHERE target_id = ? ORDER BY tested_at ASC LIMIT 100').all(targetId);
-  res.json({ target, metrics });
+  if (!target) return res.status(404).json({ error: 'Destino não encontrado' });
+
+  // Busca as 120 medições mais recentes e inverte para ordem cronológica no gráfico
+  const limit = parseInt(req.query.limit || 120, 10);
+  const recent = db.prepare(`
+    SELECT link_name, rtt, loss, tested_at 
+    FROM sdwan_metrics 
+    WHERE target_id = ? 
+    ORDER BY id DESC 
+    LIMIT ?
+  `).all(targetId, limit);
+
+  res.json({ target, metrics: recent.reverse() });
 });
 
 app.get('/api/routers/:id/links', authMiddleware, (req, res) => {
   const routerId = req.params.id;
-  const links = db.prepare('SELECT * FROM link_statuses WHERE router_id = ? ORDER BY link_name ASC').all(routerId);
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+
+  let links = db.prepare('SELECT * FROM link_statuses WHERE router_id = ? ORDER BY link_name ASC').all(routerId);
   const events = db.prepare('SELECT * FROM link_events WHERE router_id = ? ORDER BY created_at DESC LIMIT 30').all(routerId);
+
+  // Se a RB ainda não registrou links via failover, sintetiza o status com base no heartbeat
+  const isOnline = router.last_seen && ((Date.now() - new Date(router.last_seen.replace(' ', 'T') + 'Z').getTime()) < 5 * 60 * 1000);
+
+  if (links.length === 0) {
+    const linkLabel = (router.has_sdwan === 0) ? 'LINK PRINCIPAL (WAN)' : 'LINK WAN (Auto-Detect)';
+    links = [{
+      id: 0,
+      router_id: router.id,
+      link_name: linkLabel,
+      status: isOnline ? 'UP' : 'DOWN',
+      score: isOnline ? 8 : 0,
+      last_changed: router.last_seen || router.created_at,
+      updated_at: router.last_seen || router.created_at
+    }];
+  } else if (router.has_sdwan === 0 && !isOnline) {
+    // Para RBs de 1 link sem SD-WAN, se o roteador não se comunica há mais de 5 minutos, reflete o link como DOWN
+    links = links.map(l => ({ ...l, status: 'DOWN', score: 0 }));
+  }
+
   res.json({ links, events });
 });
 
@@ -500,16 +591,24 @@ function generateSyncTargetsScript(routerId) {
   let rsc = `:log info message="[TRACERT+] Sincronizando address-list SDWAN_TARGETS...";\n`;
   rsc += `/ip firewall address-list remove [find list="SDWAN_TARGETS" dynamic=no];\n`;
   for (const t of targets) {
-    const cleanName = (t.name || t.address).replace(/"/g, '');
-    rsc += `/ip firewall address-list add list="SDWAN_TARGETS" address="${t.address}" comment="${cleanName}";\n`;
+    const cleanAddress = (t.address || '').replace(/["\r\n;\\]/g, '').trim();
+    if (!/^[a-zA-Z0-9.:_/-]+$/.test(cleanAddress)) continue; // rejeita quebra de comando RouterOS
+    const cleanName = (t.name || cleanAddress).replace(/["\r\n;\\]/g, '').trim();
+    rsc += `/ip firewall address-list add list="SDWAN_TARGETS" address="${cleanAddress}" comment="${cleanName}";\n`;
   }
   rsc += `:log info message="[TRACERT+] address-list SDWAN_TARGETS atualizada (${targets.length} destinos).";\n`;
   return rsc;
 }
 
-function generateOtaSdwanScript(router) {
+function isRouterOSv6(router) {
+  const v = (router.routeros_version || '').trim();
+  return v.startsWith('6.') || v.includes(' 6.') || v.startsWith('v6');
+}
+
+function generateOtaSdwanScriptV6(router) {
   return `/system script remove [find name="sdwan_monitor"]
 /system script add dont-require-permissions=no name="sdwan_monitor" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    # --- CONFIGURACOES DO TRACERT+ (ROUTEROS v6) ---
     :local apiBaseUrl "https://tracert.tiplus.inf.br/api/telemetry/sdwan"
     :local routerToken "${router.token}"
     :local listName "SDWAN_TARGETS"
@@ -517,9 +616,160 @@ function generateOtaSdwanScript(router) {
     :local pingInterval 00:00:00.2
     :global foRouterName [/system identity get name]
 
-    :local linkNames [:toarray "LINK - TIM,Link - GSM"]
-    :local linkIfaces [:toarray "ether1-TIM,GSM"]
-    :local linkGws [:toarray "192.168.1.1,GSM"]
+    :local linkNames [:toarray ""]
+    :local linkGws [:toarray ""]
+    :foreach r in=[/ip route find dst-address=0.0.0.0/0] do={
+        :local rCmt [/ip route get $r comment]
+        :if ([:len $rCmt] > 0 and ($rCmt ~ "[Ll][Ii][Nn][Kk]") and !($rCmt ~ "!==")) do={
+            :local rClean $rCmt
+            :local rHash [:find $rCmt "#"]
+            :if ([:typeof $rHash] = "num") do={ :set rClean [:pick $rCmt 0 $rHash] }
+            :local rGw [/ip route get $r gateway]
+            :set linkNames ($linkNames, $rClean)
+            :set linkGws ($linkGws, $rGw)
+        }
+    }
+
+    :foreach entry in=[/ip firewall address-list find list=$listName] do={
+        :local targetAddress [/ip firewall address-list get $entry address]
+        :local targetComment [/ip firewall address-list get $entry comment]
+        :local isDynamic [/ip firewall address-list get $entry dynamic]
+
+        :local ipParaTestar $targetAddress
+        :local nomeExibicao $targetComment
+        :local processar false
+
+        :local dynEntry [/ip firewall address-list find list=$listName comment=$targetAddress dynamic=yes]
+        :if ([:len $dynEntry] > 0) do={
+            :set ipParaTestar [/ip firewall address-list get ($dynEntry->0) address]
+            :set processar true
+        } else={
+            :if ($isDynamic = false) do={
+                :set ipParaTestar $targetAddress
+                :set processar true
+            }
+        }
+
+        :if ($processar = true) do={
+            :if ([:len $nomeExibicao] = 0) do={ :set nomeExibicao $targetAddress }
+
+            :local melhorLink ""
+            :local melhorGw ""
+            :local menorPerda 100
+            :local menorRtt 999999
+            :local linksDataJson ""
+
+            :local rotaAtualId [/ip route find dst-address=($ipParaTestar . "/32") comment~"SDWAN_AUTO"]
+            :local linkAtualName "PADRAO"
+            :if ([:len $rotaAtualId] > 0) do={
+                :local cmtAtual [/ip route get $rotaAtualId comment]
+                :set linkAtualName [:pick $cmtAtual ([:find $cmtAtual "via "] + 4) [:len $cmtAtual]]
+            }
+
+            :for i from=0 to=([:len $linkNames] - 1) do={
+                :local linkName ($linkNames->$i)
+                :local ifaceName ($linkIfaces->$i)
+                :local gw ($linkGws->$i)
+
+                :local recebidos [/ping $ipParaTestar interface=$ifaceName count=$pingCount interval=$pingInterval]
+                :local perda 100
+                :local mediaRtt 999999
+
+                # Medicao de RTT real para RouterOS v6 via /tool flood-ping
+                :if ($recebidos > 0) do={
+                    :set perda (100 - (($recebidos * 100) / $pingCount))
+                    :do {
+                        :local fp [/tool flood-ping $ipParaTestar count=$pingCount interface=$ifaceName as-value]
+                        :local rttVal ($fp->"avg-rtt")
+                        :if ([:typeof $rttVal] = "num") do={
+                            :set mediaRtt $rttVal
+                            :if ($mediaRtt = 0) do={ :set mediaRtt 1 }
+                        } else={
+                            :set mediaRtt 1
+                        }
+                    } on-error={
+                        :set mediaRtt 1
+                    }
+                }
+
+                :local linkJson ("{\"link\":\"" . $linkName . "\",\"gw\":\"" . $gw . "\",\"perda\":" . $perda . ",\"rtt\":" . $mediaRtt . "}")
+                :if ([:len $linksDataJson] > 0) do={
+                    :set linksDataJson ($linksDataJson . "," . $linkJson)
+                } else={
+                    :set linksDataJson $linkJson
+                }
+
+                :if ($melhorLink = "") do={
+                    :set melhorLink $linkName
+                    :set melhorGw $gw
+                    :set menorPerda $perda
+                    :set menorRtt $mediaRtt
+                } else={
+                    :if ($perda < $menorPerda) do={
+                        :set melhorLink $linkName
+                        :set melhorGw $gw
+                        :set menorPerda $perda
+                        :set menorRtt $mediaRtt
+                    } else={
+                        :if ($perda = $menorPerda and $mediaRtt < $menorRtt) do={
+                            :set melhorLink $linkName
+                            :set melhorGw $gw
+                            :set menorPerda $perda
+                            :set menorRtt $mediaRtt
+                        }
+                    }
+                }
+            }
+
+            :local houveTroca false
+            :local flagTroca "false"
+            :if ($linkAtualName != $melhorLink and $melhorGw != "") do={
+                :set houveTroca true
+                :set flagTroca "true"
+                :do { /ip route remove [find dst-address=($ipParaTestar . "/32") comment~"SDWAN_AUTO"] } on-error={}
+                /ip route add dst-address=($ipParaTestar . "/32") gateway=$melhorGw comment=("SDWAN_AUTO [" . $nomeExibicao . "] via " . $melhorLink)
+                /log warning message=("[TRACERT+] Destino " . $nomeExibicao . " (" . $ipParaTestar . ") agora via [" . $melhorLink . "] - RTT: " . $menorRtt . "ms | Perda: " . $menorPerda . "%")
+            }
+
+            :local payload ("{\"token\":\"" . $routerToken . "\",\"roteador\":\"" . $foRouterName . "\",\"nomeDestino\":\"" . $nomeExibicao . "\",\"endereco\":\"" . $ipParaTestar . "\",\"linkAtivo\":\"" . $melhorLink . "\",\"linkAnterior\":\"" . $linkAtualName . "\",\"houveTroca\":" . $flagTroca . ",\"melhorRtt\":" . $menorRtt . ",\"melhorPerda\":" . $menorPerda . ",\"testes\":[" . $linksDataJson . "]}")
+            :do {
+                /tool fetch http-method=post http-header-field="Content-Type: application/json" url=($apiBaseUrl . "/" . $routerToken) http-data=$payload keep-result=no
+            } on-error={
+                /log error message=("[TRACERT+] Erro ao enviar telemetria para a API (" . $nomeExibicao . ")")
+            }
+        }
+    }
+}
+/system scheduler remove [find name="executa_sdwan_monitor"]
+/system scheduler add interval=1m name="executa_sdwan_monitor" on-event="sdwan_monitor" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+:log info message="[TRACERT+] Script sdwan_monitor v6 oficial atualizado via OTA com sucesso!";
+`;
+}
+
+function generateOtaSdwanScriptV7(router) {
+  return `/system script remove [find name="sdwan_monitor"]
+/system script add dont-require-permissions=no name="sdwan_monitor" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    # --- CONFIGURACOES DO TRACERT+ (ROUTEROS v7) ---
+    :local apiBaseUrl "https://tracert.tiplus.inf.br/api/telemetry/sdwan"
+    :local routerToken "${router.token}"
+    :local listName "SDWAN_TARGETS"
+    :local pingCount 3
+    :local pingInterval 00:00:00.2
+    :global foRouterName [/system identity get name]
+
+    :local linkNames [:toarray ""]
+    :local linkGws [:toarray ""]
+    :foreach r in=[/ip route find dst-address=0.0.0.0/0] do={
+        :local rCmt [/ip route get $r comment]
+        :if ([:len $rCmt] > 0 and ($rCmt ~ "[Ll][Ii][Nn][Kk]") and !($rCmt ~ "!==")) do={
+            :local rClean $rCmt
+            :local rHash [:find $rCmt "#"]
+            :if ([:typeof $rHash] = "num") do={ :set rClean [:pick $rCmt 0 $rHash] }
+            :local rGw [/ip route get $r gateway]
+            :set linkNames ($linkNames, $rClean)
+            :set linkGws ($linkGws, $rGw)
+        }
+    }
 
     :foreach entry in=[/ip firewall address-list find list=$listName] do={
         :local targetAddress [/ip firewall address-list get $entry address]
@@ -626,7 +876,7 @@ function generateOtaSdwanScript(router) {
 
             :local payload ("{\"token\":\"" . $routerToken . "\",\"roteador\":\"" . $foRouterName . "\",\"nomeDestino\":\"" . $nomeExibicao . "\",\"endereco\":\"" . $ipParaTestar . "\",\"linkAtivo\":\"" . $melhorLink . "\",\"linkAnterior\":\"" . $linkAtualName . "\",\"houveTroca\":" . $flagTroca . ",\"melhorRtt\":" . $menorRtt . ",\"melhorPerda\":" . $menorPerda . ",\"testes\":[" . $linksDataJson . "]}")
             :do {
-                /tool fetch http-method=post http-header-field="Content-Type: application/json" url=($apiBaseUrl . "?token=" . $routerToken) http-data=$payload keep-result=no
+                /tool fetch http-method=post http-header-field="Content-Type: application/json" url=($apiBaseUrl . "/" . $routerToken) http-data=$payload keep-result=no
             } on-error={
                 /log error message=("[TRACERT+] Erro ao enviar telemetria para a API (" . $nomeExibicao . ")")
             }
@@ -635,9 +885,747 @@ function generateOtaSdwanScript(router) {
 }
 /system scheduler remove [find name="executa_sdwan_monitor"]
 /system scheduler add interval=1m name="executa_sdwan_monitor" on-event="sdwan_monitor" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
-:log info message="[TRACERT+] Script sdwan_monitor v4.1 atualizado via OTA com sucesso!";
+:log info message="[TRACERT+] Script sdwan_monitor v4.1 (v7) atualizado via OTA com sucesso!";
 `;
 }
+
+function generateOtaSdwanScript(router) {
+  if (isRouterOSv6(router)) {
+    return generateOtaSdwanScriptV6(router);
+  }
+  return generateOtaSdwanScriptV7(router);
+}
+
+function generateFailoverScript(router) {
+  return `# =======================================================================
+# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL v8 UNIVERSAL)
+# Roteador: ${router.name}
+# Token: ${router.token}
+# Padrão: Rotas /ip route com comentário "LINK - OPERADORA"
+# =======================================================================
+
+:local apiBaseUrl "https://tracert.tiplus.inf.br/api/telemetry/failover"
+:local routerToken "${router.token}"
+
+# 1. Limpeza segura de regras anteriores
+:foreach r in=[/ip route find comment~"!=="] do={ :do { /ip route remove $r } on-error={} }
+:do { :foreach r in=[/routing rule find comment~"!=="] do={ :do { /routing rule remove $r } on-error={} } } on-error={}
+:do { :foreach r in=[/ip route rule find comment~"!=="] do={ :do { /ip route rule remove $r } on-error={} } } on-error={}
+:do { :foreach t in=[/routing table find name~"rota-de-teste"] do={ :do { /routing table remove $t } on-error={} } } on-error={}
+:do { /system script remove [find name="failover"] } on-error={}
+:do { /system script remove [find name="FAILOVER_ACTIONS"] } on-error={}
+:do { /system scheduler remove [find name="executa script failover"] } on-error={}
+
+# 2. Configura a acao FAILOVER_ACTIONS conectada ao TRACERT+
+/system script add dont-require-permissions=no name="FAILOVER_ACTIONS" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="#=======================================================================
+\
+
+# =============== VARIAVEIS GERAIS =====================================
+\
+
+#=======================================================================
+\
+
+:global comentario
+\
+
+:local comentarioActions \$comentario
+\
+
+:local hashPos [:find \$comentario \"#\"]
+\
+
+:if ([:typeof \$hashPos] = \"num\") do={
+\
+
+    :set comentarioActions [:pick \$comentario 0 \$hashPos]
+\
+
+}
+\
+
+:global LinkStatus
+\
+
+:global LinkState
+\
+
+:local LinkStateActions \$LinkState
+\
+
+:global emoji
+\
+
+:global routerName [/system identity get name]
+\
+
+:global foPingScore
+\
+
+:if ([:len \$foPingScore] = 0) do={ :global foPingScore 8 }
+\
+
+:if (\$LinkStateActions > 0) do={
+\
+
+    :global emoji \"%F0%9F%9F%A2\"
+\
+
+    :global LinkStatus \"UP\"
+\
+
+} else={
+\
+
+    :global emoji \"%F0%9F%94%B4\"
+\
+
+    :global LinkStatus \"DOWN\"
+\
+
+}
+\
+
+#=======================================================================
+\
+
+# =============== GERAR LOG LOCAL =====================================
+\
+
+#=======================================================================
+\
+
+/log warning message=(\"[FAILOVER] LINK: \" . \$comentarioActions . \" -- STATUS: \" . \$LinkStatus . \" (Score: \" . [:tostr \$foPingScore] . \"/8)\")
+\
+
+#=======================================================================
+\
+
+# =============== ENVIO TRACERT+ (DISPARA WHATSAPP EVOLUTION) =========
+\
+
+#=======================================================================
+\
+
+:local payload (\"token=${router.token}&link=\" . \$comentarioActions . \"&status=\" . \$LinkStatus . \"&score=\" . [:tostr \$foPingScore])
+\
+
+:do {
+\
+
+    /tool fetch check-certificate=no http-method=post http-header-field=\"Content-Type: application/x-www-form-urlencoded\" url=\"https://tracert.tiplus.inf.br/api/telemetry/failover/${router.token}\" http-data=\$payload keep-result=no
+\
+
+} on-error={
+\
+
+    :do {
+\
+
+        /tool fetch http-method=post http-header-field=\"Content-Type: application/x-www-form-urlencoded\" url=\"https://tracert.tiplus.inf.br/api/telemetry/failover/${router.token}\" http-data=\$payload keep-result=no
+\
+
+    } on-error={
+\
+
+        /log error message=(\"[FAILOVER] Erro ao enviar status do link \" . \$comentarioActions . \" para o TRACERT+\")
+\
+
+    }
+\
+
+}
+\
+
+#=======================================================================
+\
+
+# =============== ENVIO TELEGRAM (OPCIONAL) ===========================
+\
+
+#=======================================================================
+\
+
+:global botToken \"----\"
+\
+
+:global groupID \"--------\"
+\
+
+:if (\$botToken != \"----\" and [:len \$botToken] > 0 and \$groupID != \"--------\" and [:len \$groupID] > 0) do={
+\
+
+    :delay 2
+\
+
+    :do {
+\
+
+        /tool fetch check-certificate=no url=(\"https://api.telegram.org/bot\" . \$botToken . \"/sendMessage?chat_id=\" . \$groupID . \"&parse_mode=HTML&text=\" . \$emoji . \$emoji . \$emoji . \$emoji . \"%0A%0A<b>ROTEADOR:</b> \" . \$routerName . \"%0A%0A<b>LINK:</b> \" . \$comentarioActions . \"%0A%0A<b>STATUS:</b> \" . \$LinkStatus . \"%0A____________________________\") keep-result=no
+\
+
+    } on-error={}
+\
+
+}
+\
+
+#=======================================================================
+\
+
+# =============== ENVIO GOOGLE SHEETS (OPCIONAL) ======================
+\
+
+#=======================================================================
+\
+
+:global urlGoogleSheets \"===========\"
+\
+
+:global sheetName \"REGISTROS\"
+\
+
+:if (\$urlGoogleSheets != \"===========\" and [:len \$urlGoogleSheets] > 0) do={
+\
+
+    :do {
+\
+
+        /tool fetch http-method=post http-header-field=\"Content-Type: application/json\" url=\$urlGoogleSheets http-data=(\"{\\"sheet\\":\\"\" . \$sheetName . \"\\",\\"ROTEADOR\\":\\"\" . \$routerName . \"\\",\\"LINK\\":\\"\" . \$comentarioActions . \"\\",\\"STATUS\\":\\"\" . \$LinkStatus . \"\\"}\" ) keep-result=no
+\
+
+    } on-error={}
+\
+
+}
+\
+
+"
+
+# 3. Setup dinâmico de tabelas e rotas de teste baseadas nos comentarios "LINK - "
+:foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
+    :local cmt [/ip route get $i comment]
+    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+        :local gw [/ip route get $i gateway]
+        :local cleanName $cmt
+        :local hashPos [:find $cmt "#"]
+        :if ([:typeof $hashPos] = "num") do={
+            :set cleanName [:pick $cmt 0 $hashPos]
+        }
+
+        :local safeCmt ""
+        :for idx from=0 to=([:len $cleanName] - 1) do={
+            :local char [:pick $cleanName $idx ($idx + 1)]
+            :if ($char = " " or $char = "/" or $char = ":" or $char = "_") do={ :set char "-" }
+            :set safeCmt ($safeCmt . $char)
+        }
+
+        :local tabName ("rota-de-teste-para-" . $safeCmt)
+
+        :do {
+            /routing table add name=$tabName fib
+        } on-error={}
+
+        :do {
+            /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-table=$tabName comment=("!== Rota de teste para " . $cleanName)
+        } on-error={
+            /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-mark=$tabName comment=("!== Rota de teste para " . $cleanName)
+        }
+
+        :do {
+            /routing rule add action=lookup-only-in-table routing-mark=$tabName table=$tabName comment=("!== Force teste para o failover ==> " . $cleanName)
+        } on-error={
+            :do { /ip route rule add action=lookup-only-in-table routing-mark=$tabName table=$tabName comment=("!== Force teste para o failover ==> " . $cleanName) } on-error={}
+        }
+
+        # Notifica imediatamente o TRACERT+ da existência do link e seu estado inicial
+        :local isDis [/ip route get $i disabled]
+        :local initStatus "UP"
+        :if ($isDis = true) do={ :set initStatus "DOWN" }
+        :local payload ("token=${router.token}&link=" . $cleanName . "&status=" . $initStatus . "&score=8")
+        :do {
+            /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url="https://tracert.tiplus.inf.br/api/telemetry/failover/${router.token}" http-data=$payload keep-result=no
+        } on-error={}
+    }
+}
+
+# 4. Script de monitoramento de Failover
+/system script add dont-require-permissions=no name="failover" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="# IPs a serem testados
+\
+
+:local IPsParaTeste [:toarray \"8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8\"]
+\
+
+:local NumeroDePings 2
+\
+
+:local Intervalo 00:00:00.5
+\
+
+:local ScoreMinimoUP 3
+\
+
+
+\
+
+:global comentario
+\
+
+:global LinkState
+\
+
+:global LinkStatus
+\
+
+:global emoji
+\
+
+:global routerName [/system identity get name]
+\
+
+:global foPingScore
+\
+
+:global foLinkName
+\
+
+:global foLinkStatus
+\
+
+
+\
+
+:local totalRotasAtivas 0
+\
+
+:foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
+\
+
+    :local cmt [/ip route get \$i comment]
+\
+
+    :if ([:len \$cmt] > 0 and (\$cmt ~ \"[Ll][Ii][Nn][Kk]\") and !(\$cmt ~ \"!==\")) do={
+\
+
+        :set totalRotasAtivas (\$totalRotasAtivas + 1)
+\
+
+    }
+\
+
+}
+\
+
+
+\
+
+:foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
+\
+
+    :local cmt [/ip route get \$i comment]
+\
+
+    :if ([:len \$cmt] > 0 and (\$cmt ~ \"[Ll][Ii][Nn][Kk]\") and !(\$cmt ~ \"!==\")) do={
+\
+
+        :delay 1
+\
+
+        :local cleanName \$cmt
+\
+
+        :local hashPos [:find \$cmt \"#\"]
+\
+
+        :if ([:typeof \$hashPos] = \"num\") do={
+\
+
+            :set cleanName [:pick \$cmt 0 \$hashPos]
+\
+
+        }
+\
+
+        :local safeCmt \"\"
+\
+
+        :for idx from=0 to=([:len \$cleanName] - 1) do={
+\
+
+            :local char [:pick \$cleanName \$idx (\$idx + 1)]
+\
+
+            :if (\$char = \" \" or \$char = \"/\" or \$char = \":\" or \$char = \"_\") do={ :set char \"-\" }
+\
+
+            :set safeCmt (\$safeCmt . \$char)
+\
+
+        }
+\
+
+        :local TabRoteAtual (\"rota-de-teste-para-\" . \$safeCmt)
+\
+
+        :local scoreAtual 0
+\
+
+        :foreach ip in=\$IPsParaTeste do={
+\
+
+            :local res 0
+\
+
+            :do { :set res [/ping \$ip count=\$NumeroDePings interval=\$Intervalo routing-table=\$TabRoteAtual] } on-error={ :set res 0 }
+\
+
+            :set scoreAtual (\$scoreAtual + \$res)
+\
+
+        }
+\
+
+        :local isDis [/ip route get \$i disabled]
+\
+
+        # SE O LINK FALHOU (score < ScoreMinimoUP) e a rota estava ATIVA (disabled=no)
+\
+
+        :if (\$scoreAtual < \$ScoreMinimoUP and \$isDis = false) do={
+\
+
+            :if (\$totalRotasAtivas > 1) do={
+\
+
+                /ip route disable [find dst-address=0.0.0.0/0 and comment=\$cmt and !comment~\"!==\"]
+\
+
+                :set totalRotasAtivas (\$totalRotasAtivas - 1)
+\
+
+                :set comentario \$cmt
+\
+
+                :set LinkState 0
+\
+
+                :set LinkStatus \"DOWN\"
+\
+
+                :set foLinkName \$cleanName
+\
+
+                :set foLinkStatus \"DOWN\"
+\
+
+                :set foPingScore \$scoreAtual
+\
+
+                :do { /system script run FAILOVER_ACTIONS } on-error={}
+\
+
+            } else={
+\
+
+                /log warning message=(\"[FAILOVER] Link \" . \$cmt . \" falhou (Score \" . [:tostr \$scoreAtual] . \"/8), mantido ativo por ser o unico restante!\")
+\
+
+                :set comentario \$cmt
+\
+
+                :set LinkState 0
+\
+
+                :set LinkStatus \"DOWN\"
+\
+
+                :set foLinkName \$cleanName
+\
+
+                :set foLinkStatus \"DOWN\"
+\
+
+                :set foPingScore \$scoreAtual
+\
+
+                :do { /system script run FAILOVER_ACTIONS } on-error={}
+\
+
+            }
+\
+
+        }
+\
+
+        # SE O LINK RECUPEROU (score >= ScoreMinimoUP) e a rota estava DESATIVADA (disabled=yes)
+\
+
+        :if (\$scoreAtual >= \$ScoreMinimoUP and \$isDis = true) do={
+\
+
+            /ip route enable [find dst-address=0.0.0.0/0 and comment=\$cmt and !comment~\"!==\"]
+\
+
+            :set totalRotasAtivas (\$totalRotasAtivas + 1)
+\
+
+            :set comentario \$cmt
+\
+
+            :set LinkState 1
+\
+
+            :set LinkStatus \"UP\"
+\
+
+            :set foLinkName \$cleanName
+\
+
+            :set foLinkStatus \"UP\"
+\
+
+            :set foPingScore \$scoreAtual
+\
+
+            :do { /system script run FAILOVER_ACTIONS } on-error={}
+\
+
+        }
+\
+
+    }
+\
+
+}
+\
+
+"
+
+# 5. Agendador (a cada 30 segundos)
+/system scheduler add interval=30s name="executa script failover" on-event="failover" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+
+# Executa imediatamente a primeira checagem para publicar os links
+:do { /system script run failover } on-error={}
+:log info message="[TRACERT+] Failover Multi-Link v8 provisionado e sincronizado!";
+`;
+}
+
+function generateBootstrapScript(router) {
+  return `# =======================================================================
+# SCRIPT DE ATIVACAO TRACERT+ (UNIVERSAL v6 / v7)
+# Roteador: ${router.name}
+# Token: ${router.token}
+# =======================================================================
+
+# 0. Garante que o MikroTik consiga resolver DNS se estiver zerado
+:do {
+    :local currentDns [/ip dns get servers]
+    :if ([:len $currentDns] = 0) do={
+        /ip dns set servers=1.1.1.1,8.8.8.8
+    }
+} on-error={}
+
+# 1. Configura Agente de Sincronizacao Remota e OTA (Modelo 2)
+/system script remove [find name="tracert_sync"]
+/system script add dont-require-permissions=no name="tracert_sync" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local syncUrl \"https://tracert.tiplus.inf.br/api/routers/sync/${router.token}\"
+\
+
+:do {
+\
+
+    /tool fetch check-certificate=no url=\$syncUrl dst-path=\"tracert_sync.rsc\" keep-result=yes
+\
+
+    :local f [/file find name=\"tracert_sync.rsc\"]
+\
+
+    :if ([:len \$f] > 0) do={
+\
+
+        :local sz [/file get \$f size]
+\
+
+        :if (\$sz > 45) do={
+\
+
+            /import file-name=\"tracert_sync.rsc\"
+\
+
+            /log info message=\"[TRACERT+] Comandos OTA sincronizados e executados com sucesso!\"
+\
+
+        }
+\
+
+        /file remove [find name=\"tracert_sync.rsc\"]
+\
+
+    }
+\
+
+} on-error={}
+\
+
+"
+/system scheduler remove [find name="executa_tracert_sync"]
+/system scheduler add interval=1m name="executa_tracert_sync" on-event="tracert_sync" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+
+# 2. Configura Monitor de Link WAN e Heartbeat (Captura comentário LINK - OPERADORA)
+/system script remove [find name="tracert_link_monitor"]
+/system script add dont-require-permissions=no name="tracert_link_monitor" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="# Busca o link de operadora pelo padrao de comentario
+\
+
+:local linkName \"\"
+\
+
+:foreach r in=[/ip route find dst-address=0.0.0.0/0] do={
+\
+
+    :local cmt [/ip route get \$r comment]
+\
+
+    :if ([:len \$cmt] > 0 and (\$cmt ~ \"[Ll][Ii][Nn][Kk]\") and !(\$cmt ~ \"!==\")) do={
+\
+
+        :local hashPos [:find \$cmt \"#\"]
+\
+
+        :if ([:typeof \$hashPos] = \"num\") do={ :set cmt [:pick \$cmt 0 \$hashPos] }
+\
+
+        :set linkName \$cmt
+\
+
+    }
+\
+
+}
+\
+
+:if (\$linkName = \"\") do={ :set linkName \"LINK - PRINCIPAL\" }
+\
+
+:local pings [/ping 8.8.8.8 count=2 interval=00:00:00.5]
+\
+
+:local score 8
+\
+
+:local st \"UP\"
+\
+
+:if (\$pings = 0) do={ :set score 0; :set st \"DOWN\" }
+\
+
+:local payload (\"token=${router.token}&link=\" . \$linkName . \"&status=\" . \$st . \"&score=\" . [:tostr \$score])
+\
+
+:do {
+\
+
+    /tool fetch check-certificate=no http-method=post http-header-field=\"Content-Type: application/x-www-form-urlencoded\" url=\"https://tracert.tiplus.inf.br/api/telemetry/failover/${router.token}\" http-data=\$payload keep-result=no
+\
+
+} on-error={}
+\
+
+"
+/system scheduler remove [find name="executa_tracert_link_monitor"]
+/system scheduler add interval=1m name="executa_tracert_link_monitor" on-event="tracert_link_monitor" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+
+# 3. Configura Agente de Telemetria de Hardware & Sistema
+/system script remove [find name="tracert_system_telemetry"]
+/system script add dont-require-permissions=no name="tracert_system_telemetry" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local resModel [/system resource get board-name]
+\
+
+:local resVersion [/system resource get version]
+\
+
+:local resCpu [/system resource get cpu]
+\
+
+:local resCpuCount [:tostr [/system resource get cpu-count]]
+\
+
+:local resCpuLoad [:tostr [/system resource get cpu-load]]
+\
+
+:local resTotalMem [:tostr ([/system resource get total-memory] / 1048576)]
+\
+
+:local resFreeMem [:tostr ([/system resource get free-memory] / 1048576)]
+\
+
+:local resUptime [:tostr [/system resource get uptime]]
+\
+
+:local rbFirmware \"N/A\"
+\
+
+:local rbSerial \"N/A\"
+\
+
+:do {
+\
+
+    :set rbFirmware [/system routerboard get current-firmware]
+\
+
+    :set rbSerial [/system routerboard get serial-number]
+\
+
+} on-error={}
+\
+
+:local payload (\"token=${router.token}&model=\" . \$resModel . \"&routerosVersion=\" . \$resVersion . \"&firmwareVersion=\" . \$rbFirmware . \"&cpuModel=\" . \$resCpu . \"&cpuCount=\" . \$resCpuCount . \"&cpuLoad=\" . \$resCpuLoad . \"&totalMemory=\" . \$resTotalMem . \"&freeMemory=\" . \$resFreeMem . \"&uptime=\" . \$resUptime . \"&serialNumber=\" . \$rbSerial)
+\
+
+:do {
+\
+
+    /tool fetch check-certificate=no http-method=post http-header-field=\"Content-Type: application/x-www-form-urlencoded\" url=\"https://tracert.tiplus.inf.br/api/telemetry/system/${router.token}\" http-data=\$payload keep-result=no
+\
+
+    /log info message=(\"[TRACERT+] Telemetria de hardware enviada com sucesso!\")
+\
+
+} on-error={
+\
+
+    /log error message=(\"[TRACERT+] Falha ao enviar telemetria de hardware\")
+\
+
+}
+\
+
+"
+/system scheduler remove [find name="executa_tracert_telemetria_sistema"]
+/system scheduler add interval=1h name="executa_tracert_telemetria_sistema" on-event="tracert_system_telemetry" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+
+# 4. Dispara primeira coleta e sincronizacao imediata
+:do { /system script run tracert_link_monitor } on-error={}
+:do { /system script run tracert_system_telemetry } on-error={}
+:do { /system script run tracert_sync } on-error={}
+
+:log info message="[TRACERT+] Roteador conectado e provisionado no TRACERT+ com sucesso!";
+`;
+}
+
+// Endpoint de download direto do bootstrap script (raw text para o 1-liner /tool fetch)
+app.get(['/api/routers/bootstrap/:token', '/api/routers/bootstrap/:token/script.rsc'], (req, res) => {
+  const router = getRouterByToken(req.params.token);
+  if (!router) return res.status(404).send('# [TRACERT+] Roteador nao encontrado' + String.fromCharCode(10));
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(generateBootstrapScript(router));
+});
+
+app.get('/api/routers/:id/bootstrap', authMiddleware, (req, res) => {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+
+  const script = generateBootstrapScript(router);
+  res.json({ router, script });
+});
 
 app.get('/api/routers/:id/commands', authMiddleware, (req, res) => {
   const routerId = req.params.id;
@@ -645,7 +1633,7 @@ app.get('/api/routers/:id/commands', authMiddleware, (req, res) => {
   res.json(commands);
 });
 
-app.post('/api/routers/:id/commands', authMiddleware, (req, res) => {
+app.post('/api/routers/:id/commands', authMiddleware, adminOnly, (req, res) => {
   const routerId = req.params.id;
   const { command, name, type } = req.body;
   if (!command) return res.status(400).json({ error: 'Comando obrigatorio' });
@@ -654,14 +1642,34 @@ app.post('/api/routers/:id/commands', authMiddleware, (req, res) => {
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
-app.post('/api/routers/:id/sync-targets', authMiddleware, (req, res) => {
+app.post('/api/routers/:id/sync-targets', authMiddleware, adminOnly, (req, res) => {
   const routerId = req.params.id;
   const script = generateSyncTargetsScript(routerId);
   const result = enqueueCommand(routerId, 'SYNC_TARGETS', 'Sincronizar Destinos SD-WAN', script);
   res.json({ success: true, message: 'Comando de sincronizacao enfileirado para o roteador', id: result.lastInsertRowid });
 });
 
-app.post('/api/routers/:id/ota-update', authMiddleware, (req, res) => {
+app.post('/api/routers/:id/failover', authMiddleware, adminOnly, (req, res) => {
+  const routerId = req.params.id;
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+
+  const script = generateFailoverScript(router);
+  const result = enqueueCommand(router.id, 'FAILOVER_SETUP', 'Provisionamento Failover Multi-Link (Bendito v8)', script);
+  res.json({ success: true, message: 'Script de Failover enfileirado com sucesso para a RB!', id: result.lastInsertRowid });
+});
+
+app.get('/api/routers/:id/failover-script', authMiddleware, (req, res) => {
+  const routerId = req.params.id;
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+
+  const script = generateFailoverScript(router);
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(script);
+});
+
+app.post('/api/routers/:id/ota-update', authMiddleware, adminOnly, (req, res) => {
   const routerId = req.params.id;
   const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId);
   if (!router) return res.status(404).json({ error: 'Roteador nao encontrado' });
@@ -671,7 +1679,7 @@ app.post('/api/routers/:id/ota-update', authMiddleware, (req, res) => {
   res.json({ success: true, message: 'Atualizacao OTA do script enfileirada com sucesso!', id: result.lastInsertRowid });
 });
 
-app.delete('/api/commands/:id', authMiddleware, (req, res) => {
+app.delete('/api/commands/:id', authMiddleware, adminOnly, (req, res) => {
   db.prepare('DELETE FROM router_commands WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -686,9 +1694,16 @@ app.get('/api/reports/availability', authMiddleware, (req, res) => {
     SELECT o.*, r.name as router_name
     FROM link_outages o
     JOIN routers r ON r.id = o.router_id
-    WHERE o.down_time BETWEEN ? AND ?
   `;
-  const params = [sDate, eDate];
+  const params = [];
+  if (req.user.role !== 'ADMIN') {
+    outagesQuery += ' JOIN group_routers gr ON gr.router_id = r.id WHERE gr.group_id = ? AND o.down_time BETWEEN ? AND ?';
+    params.push(req.user.groupId, sDate, eDate);
+  } else {
+    outagesQuery += ' WHERE o.down_time BETWEEN ? AND ?';
+    params.push(sDate, eDate);
+  }
+
   if (routerId) {
     outagesQuery += ' AND o.router_id = ?';
     params.push(routerId);
@@ -719,9 +1734,16 @@ app.get('/api/reports/sdwan', authMiddleware, (req, res) => {
     FROM sdwan_history h
     JOIN sdwan_targets t ON t.id = h.target_id
     JOIN routers r ON r.id = t.router_id
-    WHERE h.started_at BETWEEN ? AND ?
   `;
-  const params = [sDate, eDate];
+  const params = [];
+  if (req.user.role !== 'ADMIN') {
+    query += ' JOIN group_routers gr ON gr.router_id = r.id WHERE gr.group_id = ? AND h.started_at BETWEEN ? AND ?';
+    params.push(req.user.groupId, sDate, eDate);
+  } else {
+    query += ' WHERE h.started_at BETWEEN ? AND ?';
+    params.push(sDate, eDate);
+  }
+
   if (routerId) {
     query += ' AND r.id = ?';
     params.push(routerId);
@@ -733,7 +1755,7 @@ app.get('/api/reports/sdwan', authMiddleware, (req, res) => {
 });
 
 // Grupos CRUD
-app.get('/api/admin/groups', authMiddleware, (req, res) => {
+app.get('/api/admin/groups', authMiddleware, adminOnly, (req, res) => {
   const groups = db.prepare('SELECT * FROM access_groups ORDER BY name ASC').all();
   const getRouters = db.prepare('SELECT router_id FROM group_routers WHERE group_id = ?');
   const enriched = groups.map(g => ({
@@ -743,14 +1765,14 @@ app.get('/api/admin/groups', authMiddleware, (req, res) => {
   res.json(enriched);
 });
 
-app.get('/api/admin/groups/:id', authMiddleware, (req, res) => {
+app.get('/api/admin/groups/:id', authMiddleware, adminOnly, (req, res) => {
   const group = db.prepare('SELECT * FROM access_groups WHERE id = ?').get(req.params.id);
   if (!group) return res.status(404).json({ error: 'Grupo não encontrado' });
   const routerIds = db.prepare('SELECT router_id FROM group_routers WHERE group_id = ?').all(group.id).map(r => r.router_id);
   res.json({ ...group, routerIds });
 });
 
-app.post('/api/admin/groups', authMiddleware, (req, res) => {
+app.post('/api/admin/groups', authMiddleware, adminOnly, (req, res) => {
   const { name, whatsappNumber, notifyLinkDown, notifySdwanSwitch, notifyRouterOffline, routerIds } = req.body;
   let cleanPhone = (whatsappNumber || '').replace(/\D/g, '');
   if (cleanPhone && !cleanPhone.startsWith('55')) cleanPhone = '55' + cleanPhone;
@@ -770,7 +1792,7 @@ app.post('/api/admin/groups', authMiddleware, (req, res) => {
   res.json({ id: groupId, success: true });
 });
 
-app.put('/api/admin/groups/:id', authMiddleware, (req, res) => {
+app.put('/api/admin/groups/:id', authMiddleware, adminOnly, (req, res) => {
   const groupId = req.params.id;
   const { name, whatsappNumber, notifyLinkDown, notifySdwanSwitch, notifyRouterOffline, routerIds } = req.body;
   let cleanPhone = (whatsappNumber || '').replace(/\D/g, '');
@@ -796,13 +1818,13 @@ app.put('/api/admin/groups/:id', authMiddleware, (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/admin/groups/:id', authMiddleware, (req, res) => {
+app.delete('/api/admin/groups/:id', authMiddleware, adminOnly, (req, res) => {
   db.prepare('DELETE FROM access_groups WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
 // Usuários CRUD
-app.get('/api/admin/users', authMiddleware, (req, res) => {
+app.get('/api/admin/users', authMiddleware, adminOnly, (req, res) => {
   const users = db.prepare(`
     SELECT u.id, u.name, u.username, u.role, u.group_id, u.inactivity_timeout_min, u.created_at, g.name as group_name
     FROM users u
@@ -812,13 +1834,13 @@ app.get('/api/admin/users', authMiddleware, (req, res) => {
   res.json(users);
 });
 
-app.get('/api/admin/users/:id', authMiddleware, (req, res) => {
+app.get('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
   const user = db.prepare('SELECT id, name, username, role, group_id, inactivity_timeout_min FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
   res.json(user);
 });
 
-app.post('/api/admin/users', authMiddleware, (req, res) => {
+app.post('/api/admin/users', authMiddleware, adminOnly, (req, res) => {
   const { name, username, password, role, groupId, timeoutMinutes } = req.body;
   const hash = bcrypt.hashSync(password || '123456', 10);
   try {
@@ -832,7 +1854,7 @@ app.post('/api/admin/users', authMiddleware, (req, res) => {
   }
 });
 
-app.put('/api/admin/users/:id', authMiddleware, (req, res) => {
+app.put('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
   const userId = req.params.id;
   const { name, username, password, role, groupId, timeoutMinutes } = req.body;
 
@@ -866,7 +1888,7 @@ app.put('/api/admin/users/:id', authMiddleware, (req, res) => {
   }
 });
 
-app.delete('/api/admin/users/:id', authMiddleware, (req, res) => {
+app.delete('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
   if (parseInt(req.params.id, 10) === req.user.id) {
     return res.status(400).json({ error: 'Você não pode excluir o seu próprio usuário logado' });
   }
@@ -875,12 +1897,12 @@ app.delete('/api/admin/users/:id', authMiddleware, (req, res) => {
 });
 
 // Evolution Config
-app.get('/api/admin/evolution', authMiddleware, (req, res) => {
+app.get('/api/admin/evolution', authMiddleware, adminOnly, (req, res) => {
   const config = db.prepare('SELECT * FROM evolution_config WHERE id = 1').get();
   res.json(config || {});
 });
 
-app.post('/api/admin/evolution', authMiddleware, (req, res) => {
+app.post('/api/admin/evolution', authMiddleware, adminOnly, (req, res) => {
   const { baseUrl, apiKey, instanceName, enabled } = req.body;
   db.prepare(`
     INSERT INTO evolution_config (id, base_url, api_key, instance_name, enabled, updated_at)
@@ -909,6 +1931,110 @@ setInterval(() => {
     }
   } catch (e) {}
 }, 120000);
+
+
+// ----------------------------------------------------------------------
+// CENTRAL DE COMANDOS EM MASSA / BROADCAST OTA
+// ----------------------------------------------------------------------
+app.post('/api/admin/commands/broadcast', authMiddleware, adminOnly, (req, res) => {
+  const { targetFilter, selectedRouterIds, commandName, script } = req.body;
+  if (!script || !script.trim()) {
+    return res.status(400).json({ error: 'O script/comando não pode estar vazio.' });
+  }
+
+  let routers = [];
+  if (targetFilter === 'ALL') {
+    routers = db.prepare('SELECT * FROM routers').all();
+  } else if (targetFilter === 'SDWAN_ONLY') {
+    routers = db.prepare('SELECT * FROM routers WHERE has_sdwan = 1 OR has_sdwan IS NULL').all();
+  } else if (targetFilter === 'SINGLE_LINK') {
+    routers = db.prepare('SELECT * FROM routers WHERE has_sdwan = 0').all();
+  } else if (targetFilter === 'ROS_V7') {
+    routers = db.prepare("SELECT * FROM routers WHERE routeros_version LIKE '7%' OR routeros_version LIKE '% 7%'").all();
+  } else if (targetFilter === 'ROS_V6') {
+    routers = db.prepare("SELECT * FROM routers WHERE routeros_version LIKE '6%' OR routeros_version LIKE '% 6%'").all();
+  } else if (targetFilter === 'SELECTED') {
+    if (!Array.isArray(selectedRouterIds) || selectedRouterIds.length === 0) {
+      return res.status(400).json({ error: 'Selecione pelo menos um MikroTik.' });
+    }
+    const placeholders = selectedRouterIds.map(() => '?').join(',');
+    routers = db.prepare(`SELECT * FROM routers WHERE id IN (${placeholders})`).all(...selectedRouterIds);
+  } else {
+    routers = db.prepare('SELECT * FROM routers').all();
+  }
+
+  if (routers.length === 0) {
+    return res.status(400).json({ error: 'Nenhum MikroTik encontrado com os filtros selecionados.' });
+  }
+
+  const batchId = 'BATCH-' + Date.now().toString(36).toUpperCase();
+  const cmdName = (commandName && commandName.trim()) ? commandName.trim() : 'Comando em Massa';
+  const insertCmd = db.prepare(`
+    INSERT INTO router_commands (router_id, command_type, command_name, payload, status, batch_id)
+    VALUES (?, 'RAW_SCRIPT', ?, ?, 'PENDING', ?)
+  `);
+
+  for (const r of routers) {
+    // Substitui automaticamente tokens genéricos pelo token exclusivo de cada RB
+    const personalizedScript = script
+      .replace(/SEU_TOKEN_AQUI/g, r.token)
+      .replace(/TOKEN_DO_ROTEADOR/g, r.token)
+      .replace(/MK-TOKEN-AQUI/g, r.token);
+    insertCmd.run(r.id, cmdName, personalizedScript, batchId);
+  }
+
+  res.json({
+    success: true,
+    batchId,
+    totalQueued: routers.length,
+    routers: routers.map(r => ({ id: r.id, name: r.name }))
+  });
+});
+
+app.get('/api/admin/commands/batches', authMiddleware, adminOnly, (req, res) => {
+  const batches = db.prepare(`
+    SELECT 
+      rc.batch_id,
+      rc.command_name,
+      rc.payload,
+      MIN(rc.created_at) as created_at,
+      COUNT(rc.id) as total_routers,
+      SUM(CASE WHEN rc.status = 'EXECUTED' THEN 1 ELSE 0 END) as executed_count,
+      SUM(CASE WHEN rc.status = 'PENDING' THEN 1 ELSE 0 END) as pending_count,
+      SUM(CASE WHEN rc.status = 'FETCHED' THEN 1 ELSE 0 END) as fetched_count,
+      SUM(CASE WHEN rc.status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled_count
+    FROM router_commands rc
+    WHERE rc.batch_id IS NOT NULL
+    GROUP BY rc.batch_id
+    ORDER BY MIN(rc.id) DESC
+    LIMIT 30
+  `).all();
+  res.json(batches);
+});
+
+app.get('/api/admin/commands/batches/:batchId', authMiddleware, adminOnly, (req, res) => {
+  const batchId = req.params.batchId;
+  const items = db.prepare(`
+    SELECT 
+      rc.id, rc.status, rc.created_at, rc.fetched_at, rc.executed_at, rc.result_log,
+      r.id as router_id, r.name as router_name, r.model, r.routeros_version, r.has_sdwan,
+      c.name as client_name
+    FROM router_commands rc
+    JOIN routers r ON r.id = rc.router_id
+    JOIN clients c ON c.id = r.client_id
+    WHERE rc.batch_id = ?
+    ORDER BY r.name ASC
+  `).all(batchId);
+  res.json(items);
+});
+
+app.post('/api/admin/commands/batches/:batchId/cancel', authMiddleware, adminOnly, (req, res) => {
+  const batchId = req.params.batchId;
+  const result = db.prepare(`
+    UPDATE router_commands SET status = 'CANCELLED' WHERE batch_id = ? AND status = 'PENDING'
+  `).run(batchId);
+  res.json({ success: true, cancelled: result.changes });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

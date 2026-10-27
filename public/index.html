@@ -24,11 +24,11 @@
       <form id="form-login" onsubmit="realizarLogin(event)">
         <div style="margin-bottom: 16px;">
           <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">Usuário</label>
-          <input type="text" id="login-username" required class="input-text" placeholder="admin" value="admin">
+          <input type="text" id="login-username" required class="input-text" placeholder="Digite seu usuário" value="" autocomplete="username">
         </div>
         <div style="margin-bottom: 20px;">
           <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">Senha</label>
-          <input type="password" id="login-password" required class="input-text" placeholder="••••••••" value="admin123">
+          <input type="password" id="login-password" required class="input-text" placeholder="Digite sua senha" value="" autocomplete="current-password">
         </div>
         <button type="submit" class="btn-primary" style="width: 100%; padding: 10px; font-size: 14px;">Entrar no Sistema</button>
       </form>
@@ -212,7 +212,127 @@
           <h1 class="page-title">Área de Administração & Gestão</h1>
         </div>
 
-        <!-- ABA 1: CLIENTES -->
+        <!-- SUB-ABAS DE ADMINISTRAÇÃO -->
+        <div class="admin-subtabs">
+          <button id="admin-subtab-routers-btn" class="admin-subtab-btn active" onclick="switchAdminSubtab('routers')">🌐 Roteadores MikroTik</button>
+          <button id="admin-subtab-commands-btn" class="admin-subtab-btn" onclick="switchAdminSubtab('commands')">⚡ Comandos em Massa (OTA)</button>
+          <button id="admin-subtab-clients-btn" class="admin-subtab-btn" onclick="switchAdminSubtab('clients')">🏢 Clientes / Empresas</button>
+          <button id="admin-subtab-evolution-btn" class="admin-subtab-btn" onclick="switchAdminSubtab('evolution')">📱 WhatsApp (Evolution API)</button>
+          <button id="admin-subtab-access-btn" class="admin-subtab-btn" onclick="switchAdminSubtab('access')">👥 Grupos & Usuários</button>
+        </div>
+
+        <!-- SUB-ABA: COMANDOS EM MASSA (OTA) -->
+        <div id="admin-subtab-commands" style="display: none;">
+          <!-- CARD DE NOVO DISPARO -->
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 22px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px;">
+              <div>
+                <h3 style="font-size: 16.5px; color: #1e293b; display: flex; align-items: center; gap: 8px;">
+                  <span>⚡</span> Disparador Centralizado de Comandos (Pull OTA - Modelo 2)
+                </h3>
+                <p style="font-size: 13px; color: #64748b; margin-top: 4px;">
+                  Envie scripts e instruções para todos os MikroTiks cadastrados ou para grupos específicos. Os comandos são puxados no próximo ciclo de sincronização (1 min) sem precisar de IP público ou VPN.
+                </p>
+              </div>
+            </div>
+
+            <form onsubmit="dispararComandoMassa(event)">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                <div>
+                  <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">
+                    🎯 Destinatários (Filtro de Roteadores)
+                  </label>
+                  <select id="bcmd-target-filter" class="select-box" style="width: 100%; height: 38px;" onchange="aoMudarFiltroDestinatarios()">
+                    <option value="ALL">🌐 Todos os MikroTiks Cadastrados</option>
+                    <option value="SDWAN_ONLY">🔀 Apenas Roteadores com SD-WAN Ativo</option>
+                    <option value="SINGLE_LINK">📶 Apenas Roteadores Single-Link (Monitoramento)</option>
+                    <option value="ROS_V7">⚙️ Apenas RouterOS v7</option>
+                    <option value="ROS_V6">⚙️ Apenas RouterOS v6</option>
+                    <option value="SELECTED">🎯 Seleção Manual de Roteadores...</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">
+                    📝 Nome / Motivo do Comando
+                  </label>
+                  <input type="text" id="bcmd-name" required class="input-text" placeholder="Ex: Ajuste de NTP Horário Brasil" style="height: 38px;">
+                </div>
+              </div>
+
+              <!-- BOX DE SELEÇÃO MANUAL (ESCONDIDO POR PADRÃO) -->
+              <div id="bcmd-manual-box" style="display: none; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <span style="font-size: 12.5px; font-weight: 600; color: #1e293b;">Selecione os MikroTiks participantes:</span>
+                  <div>
+                    <button type="button" class="btn-primary" style="padding: 3px 8px; font-size: 11px;" onclick="marcarTodosRoutersMassa(true)">Todos</button>
+                    <button type="button" class="btn-primary" style="padding: 3px 8px; font-size: 11px; background: #64748b;" onclick="marcarTodosRoutersMassa(false)">Nenhum</button>
+                  </div>
+                </div>
+                <div id="bcmd-routers-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; max-height: 140px; overflow-y: auto;"></div>
+              </div>
+
+              <!-- TEMPLATES RÁPIDOS -->
+              <div style="margin-bottom: 12px;">
+                <div style="font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 6px;">
+                  🚀 Modelos Rápidos (Clique para preencher o script):
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                    <button type="button" class="template-chip" onclick="aplicarTemplateMassa('failover')" style="background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; font-weight:700;">🛡️ Failover Multi-Link (Bendito v8)</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('single_link')" style="background:#f0fdf4; color:#15803d; border-color:#bbf7d0; font-weight:700;">📶 Monitor 1-Link WAN (Heartbeat)</button>
+<button type="button" class="template-chip" onclick="aplicarTemplateMassa('ntp')">🕒 NTP Brasil (Horário)</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('dns')">🌐 DNS Cloudflare & Google</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('flush_dns')">🧹 Limpar Cache DNS</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('telemetry')">📡 Forçar Telemetria Imediata</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('reboot')">🔄 Reiniciar Equipamento (Reboot)</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('clear')" style="color: #ef4444;">❌ Limpar Script</button>
+                </div>
+              </div>
+
+              <!-- ÁREA DO SCRIPT -->
+              <div style="margin-bottom: 18px;">
+                <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">
+                  💻 Script RouterOS (.rsc)
+                </label>
+                <textarea id="bcmd-script" required class="code-editor-area" placeholder="# Cole aqui comandos nativos do RouterOS (ex: /system identity print)"></textarea>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+                <span id="bcmd-status-hint" style="font-size: 12.5px; color: #64748b;"></span>
+                <button type="submit" id="btn-disparar-massa" class="btn-primary" style="padding: 10px 20px; font-size: 14px; font-weight: 600;">
+                  🚀 Disparar Comandos
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- HISTÓRICO DE LOTES -->
+          <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 22px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div>
+                <h3 style="font-size: 16px; color: #1e293b;">Histórico de Comandos em Massa</h3>
+                <p style="font-size: 13px; color: #64748b;">Acompanhamento do status de execução e entrega de cada disparo realizado.</p>
+              </div>
+              <button class="btn-primary" style="background: #f1f5f9; color: #334155; border: 1px solid var(--border-color);" onclick="carregarHistoricoLotesMassa()">
+                🔄 Atualizar Fila
+              </button>
+            </div>
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;" id="admin-batch-commands-table">
+              <thead>
+                <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
+                  <th style="padding: 10px;">Data / Hora</th>
+                  <th style="padding: 10px;">Identificação do Comando</th>
+                  <th style="padding: 10px;">Roteadores Alvo</th>
+                  <th style="padding: 10px;">Progresso de Execução</th>
+                  <th style="padding: 10px; text-align: right;">Ações</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="admin-subtab-clients" style="display: none;">
         <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div>
@@ -234,7 +354,8 @@
           </table>
         </div>
 
-        <!-- ABA 2: MIKROTIKS (COM DADOS DE HARDWARE) -->
+        </div>
+        <div id="admin-subtab-routers">
         <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div>
@@ -259,7 +380,8 @@
           </table>
         </div>
 
-        <!-- ABA 3: EVOLUTION API -->
+        </div>
+        <div id="admin-subtab-evolution" style="display: none;">
         <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
           <h3 style="font-size: 16px; margin-bottom: 8px; color: #1e293b;">Integração Evolution API (WhatsApp)</h3>
           <p style="font-size: 13px; color: #64748b; margin-bottom: 16px;">Configuração para envio dos alertas direto nos WhatsApps cadastrados.</p>
@@ -285,7 +407,8 @@
           </form>
         </div>
 
-        <!-- ABA 4: GRUPOS E USUÁRIOS -->
+        </div>
+        <div id="admin-subtab-access" style="display: none;">
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
           <div style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -320,6 +443,7 @@
               <tbody></tbody>
             </table>
           </div>
+        </div>
         </div>
       </main>
     </div>
@@ -390,9 +514,18 @@
             <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Nome do Roteador</label>
             <input type="text" id="router-form-nome" required class="input-text" placeholder="Ex: CCR2004 Matriz">
           </div>
-          <div style="margin-bottom: 18px;">
+          <div style="margin-bottom: 14px;">
             <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Modelo Inicial (ou será preenchido automaticamente pela telemetria)</label>
             <input type="text" id="router-form-model" class="input-text" placeholder="Ex: CCR2004-16G-2S+">
+          </div>
+          <div style="margin-bottom: 18px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+            <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="router-form-sdwan" checked style="margin-top: 3px;">
+              <div>
+                <span style="font-weight: 600; color: #1e293b;">Habilitar SD-WAN Multi-Link</span>
+                <p style="font-size: 12px; color: #64748b; margin-top: 2px;">Desmarque para roteadores com apenas 1 link WAN (modo Apenas Telemetria & Monitoramento de Queda/Offline).</p>
+              </div>
+            </label>
           </div>
           <button type="submit" class="btn-primary" style="width: 100%;">Salvar MikroTik</button>
         </form>
@@ -503,7 +636,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=12"></script>
   <!-- MODAL: Gestão Remota & OTA (Modelo 2) -->
   <div id="modal-ota" class="timeline-modal" style="display: none;">
     <div class="timeline-dialog" style="max-width: 820px;">
@@ -526,6 +659,9 @@
           </button>
           <button class="btn-secondary" onclick="enviarOtaUpdateScript()" style="font-size: 13px;">
             🔄 Atualizar Script SD-WAN (v4.1 OTA)
+          </button>
+          <button class="btn-secondary" onclick="enviarFailoverOTA()" style="font-size: 13px; background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; font-weight:600;" title="Instala ou atualiza o Script Oficial de Failover Multi-Link (Bendito v8)">
+            🛡️ Provisionar Failover Automático
           </button>
           <button class="btn-secondary" onclick="alternarInstrucoesAgente()" style="font-size: 13px;">
             📋 Script do Agente de Sync
@@ -571,6 +707,69 @@
               <tbody id="ota-commands-tbody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- MODAL: Detalhes do Lote de Comandos em Massa -->
+  <div id="modal-batch-details" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 680px;">
+      <div class="dialog-header">
+        <h2 id="modal-batch-title" class="dialog-title">Detalhes do Disparo em Massa</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div style="margin-bottom: 14px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+            <span style="font-size: 13px; font-weight: 600; color: #1e293b;" id="batch-modal-cmd-name">Comando</span>
+            <span style="font-size: 12px; color: #64748b;" id="batch-modal-created">Data</span>
+          </div>
+          <div style="font-size: 12px; color: #475569;" id="batch-modal-stats">Status Geral</div>
+        </div>
+        
+        <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px;">Status Individual dos Roteadores:</div>
+        <div style="max-height: 240px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 16px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;" id="batch-routers-detail-table">
+            <thead>
+              <tr style="text-align: left; background: #f1f5f9; border-bottom: 1px solid var(--border-color); color: #475569;">
+                <th style="padding: 8px 10px;">Cliente / Roteador</th>
+                <th style="padding: 8px 10px;">Modelo / ROS</th>
+                <th style="padding: 8px 10px;">Status</th>
+                <th style="padding: 8px 10px;">Executado em</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div style="font-weight: 600; font-size: 12.5px; margin-bottom: 6px;">Script Enviado:</div>
+        <pre id="batch-modal-script" style="background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 12px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;"></pre>
+        
+        <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+          <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer;">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- MODAL: Script de Ativação (Bootstrap) -->
+  <div id="modal-bootstrap" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 650px;">
+      <div class="dialog-header">
+        <h2 id="modal-bootstrap-title" class="dialog-title">Script de Ativação 1-Touch</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <p style="font-size: 13px; color: #64748b; margin-bottom: 12px;">
+          Este script já vem configurado com o token <code id="modal-bootstrap-token" style="font-weight: bold; color: #0284c7;"></code> do roteador. Basta copiar e colar no terminal do MikroTik (Winbox ou SSH).
+        </p>
+        <textarea id="modal-bootstrap-script" readonly class="code-editor-area" style="height: 220px; margin-bottom: 16px; font-size: 12px;"></textarea>
+        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 10px 18px; font-size: 13.5px; cursor: pointer;">Fechar</button>
+          <button class="btn-primary" onclick="copiarTextoBootstrap()" style="padding: 10px 18px; font-size: 13.5px;">📋 Copiar Script Completo</button>
         </div>
       </div>
     </div>

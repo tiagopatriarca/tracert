@@ -13,8 +13,10 @@ services:
       - "traefik.http.routers.tracert.tls.certresolver=letsencrypt"
       - "traefik.http.services.tracert.loadbalancer.server.port=3000"
     environment:
+      - TZ=America/Sao_Paulo
       - PORT=3000
       - NODE_ENV=production
       - DATA_DIR=/app/data
+      - JWT_SECRET=TRACERT_PROD_JWT_SEC_78b2f91a0c4e85d1e63ab94f27103ca7
     volumes:
       - ./data:/app/data

@@ -12,12 +12,21 @@ export async function sendEvolutionWhatsapp(tipoNotificacao, routerId, mensagemT
     if (tipoNotificacao === 'SDWAN') filterColumn = 'notify_sdwan_switch';
     if (tipoNotificacao === 'ROUTER_OFFLINE') filterColumn = 'notify_router_offline';
 
-    const groups = db.prepare(`
+    let groups = db.prepare(`
       SELECT g.whatsapp_number, g.name 
       FROM access_groups g
       JOIN group_routers gr ON gr.group_id = g.id
       WHERE gr.router_id = ? AND g.${filterColumn} = 1 AND g.whatsapp_number IS NOT NULL AND g.whatsapp_number != ''
     `).all(routerId);
+
+    // Se nenhum grupo estiver explicitamente vinculado a este roteador, busca qualquer grupo com a notificacao ativa
+    if (groups.length === 0) {
+      groups = db.prepare(`
+        SELECT g.whatsapp_number, g.name 
+        FROM access_groups g
+        WHERE g.${filterColumn} = 1 AND g.whatsapp_number IS NOT NULL AND g.whatsapp_number != ''
+      `).all();
+    }
 
     for (const g of groups) {
       let number = g.whatsapp_number.replace(/\D/g, '');
