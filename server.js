@@ -182,7 +182,14 @@ app.post(['/api/telemetry/failover', '/api/telemetry/failover/:token'], async (r
   const data = { ...req.query, ...req.body };
   const linkName = data.link || data.linkName || 'LINK-WAN';
   const linkStatus = (data.status || 'UP').toUpperCase();
-  const pingScore = parseInt(data.score || 8, 10);
+  let pingScore = 0;
+  if (data.score !== undefined && data.score !== null && data.score !== '') {
+    pingScore = parseInt(data.score, 10);
+    if (isNaN(pingScore)) pingScore = (linkStatus === 'UP' ? 8 : 0);
+  } else {
+    pingScore = (linkStatus === 'UP' ? 8 : 0);
+  }
+  console.log(`[FAILOVER TELEMETRY] Router: ${router.name} (${router.token}) | Link: ${linkName} | Status: ${linkStatus} | Score: ${pingScore}/8`);
 
   const prev = db.prepare('SELECT status, last_changed FROM link_statuses WHERE router_id = ? AND link_name = ?').get(router.id, linkName);
   const statusMudou = !prev || prev.status !== linkStatus;
@@ -918,6 +925,8 @@ function generateFailoverScript(router) {
 # =======================================================================
 
 # 1. Limpeza segura de regras anteriores
+:do { /system script remove [find name="tracert_link_monitor"] } on-error={}
+:do { /system scheduler remove [find name="executa_tracert_link_monitor"] } on-error={}
 :foreach r in=[/ip route find comment~"!=="] do={ :do { /ip route remove $r } on-error={} }
 :do { :foreach r in=[/routing rule find comment~"!=="] do={ :do { /routing rule remove $r } on-error={} } } on-error={}
 :do { :foreach r in=[/ip route rule find comment~"!=="] do={ :do { /ip route rule remove $r } on-error={} } } on-error={}
@@ -946,7 +955,7 @@ function generateFailoverScript(router) {
 
     :global foPingScore
     :local scoreFinal $foPingScore
-    :if ([:len $scoreFinal] = 0) do={
+    :if ([:typeof $scoreFinal] != "num") do={
         :if ($statusFinal = "UP") do={ :set scoreFinal 8 } else={ :set scoreFinal 0 }
     }
 
@@ -1048,13 +1057,22 @@ function generateFailoverScript(router) {
 
             :local scoreAtual 0
             :local rGw [/ip route get $i gateway]
+            :local ifaceName $rGw
+            :do {
+                :local immGw [/ip route get $i immediate-gw]
+                :local pctPos [:find $immGw "%"]
+                :if ([:typeof $pctPos] = "num") do={
+                    :set ifaceName [:pick $immGw ($pctPos + 1) [:len $immGw]]
+                }
+            } on-error={}
+
             :foreach ip in=$IPsParaTeste do={
                 :local res 0
                 :do {
                     :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual]
                 } on-error={
                     :do {
-                        :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$rGw]
+                        :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName]
                     } on-error={ :set res 0 }
                 }
                 :set scoreAtual ($scoreAtual + $res)
