@@ -140,9 +140,12 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
   const cloudStatus = data.cloudStatus;
 
   touchRouterSeen(router);
-  console.log(`[TELEMETRY] RB ${router.name} (${router.token}) recebido: CloudDNS=${cloudDns || 'N/A'}, CloudIP=${cloudIp || 'N/A'}, Status=${cloudStatus || 'N/A'}`);
 
-  db.prepare(`
+  const finalCloudDns = (cloudDns && cloudDns !== 'N/A' && String(cloudDns).trim() !== '') ? String(cloudDns).trim() : null;
+  const finalCloudIp = (cloudIp && cloudIp !== 'N/A' && String(cloudIp).trim() !== '') ? String(cloudIp).trim() : null;
+  const finalCloudStatus = (cloudStatus && cloudStatus !== 'N/A' && String(cloudStatus).trim() !== '') ? String(cloudStatus).trim() : null;
+
+  const updateResult = db.prepare(`
     UPDATE routers SET
       model = COALESCE(?, model),
       routeros_version = ?,
@@ -154,21 +157,30 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
       free_memory = ?,
       uptime = ?,
       serial_number = ?,
-      cloud_dns_name = CASE WHEN ? IS NOT NULL AND ? != 'N/A' AND ? != '' THEN ? ELSE cloud_dns_name END,
-      cloud_public_ip = CASE WHEN ? IS NOT NULL AND ? != 'N/A' AND ? != '' THEN ? ELSE cloud_public_ip END,
+      cloud_dns_name = COALESCE(?, cloud_dns_name),
+      cloud_public_ip = COALESCE(?, cloud_public_ip),
       cloud_status = COALESCE(?, cloud_status),
       offline_notified = 0,
       last_seen = datetime('now')
     WHERE id = ?
   `).run(
-    model ?? null, routerosVersion ?? null, firmwareVersion ?? null,
-    cpuModel ?? null, (cpuCount !== undefined && cpuCount !== null) ? Number(cpuCount) : 1, (cpuLoad !== undefined && cpuLoad !== null) ? Number(cpuLoad) : 0,
-    (totalMemory !== undefined && totalMemory !== null) ? Number(totalMemory) : 0, (freeMemory !== undefined && freeMemory !== null) ? Number(freeMemory) : 0, uptime ?? null, serialNumber ?? null,
-    cloudDns ?? null, cloudDns ?? null, cloudDns ?? null,
-    cloudIp ?? null, cloudIp ?? null, cloudIp ?? null,
-    cloudStatus ?? null,
+    model ?? null,
+    routerosVersion ?? null,
+    firmwareVersion ?? null,
+    cpuModel ?? null,
+    (cpuCount !== undefined && cpuCount !== null) ? Number(cpuCount) : 1,
+    (cpuLoad !== undefined && cpuLoad !== null) ? Number(cpuLoad) : 0,
+    (totalMemory !== undefined && totalMemory !== null) ? Number(totalMemory) : 0,
+    (freeMemory !== undefined && freeMemory !== null) ? Number(freeMemory) : 0,
+    uptime ?? null,
+    serialNumber ?? null,
+    finalCloudDns,
+    finalCloudIp,
+    finalCloudStatus,
     router.id
   );
+
+  console.log(`[TELEMETRY] RB ${router.name} (${router.token}) salvo: CloudDNS=${finalCloudDns || 'N/A'}, CloudIP=${finalCloudIp || 'N/A'}, Changes=${updateResult.changes}`);
 
     // Auto-provisionamento inicial: se for primeira conexão da RB, agenda SD-WAN apropriado (v6 ou v7) e destinos
   const existingCmds = db.prepare('SELECT count(*) as count FROM router_commands WHERE router_id = ?').get(router.id);
