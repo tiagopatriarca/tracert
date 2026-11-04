@@ -11,6 +11,13 @@ import { sendEvolutionWhatsapp } from './whatsapp.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
+const backupsDir = path.join(dataDir, 'backups');
+if (!fs.existsSync(backupsDir)) {
+  fs.mkdirSync(backupsDir, { recursive: true });
+}
+
+
 initDatabase();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'TRACERT_PLUS_SECRET_KEY_2026_SECURE_NODE_TI';
@@ -127,6 +134,9 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
   const freeMemory = data.freeMemory;
   const uptime = data.uptime;
   const serialNumber = data.serialNumber;
+  const cloudDns = data.cloudDns;
+  const cloudIp = data.cloudIp;
+  const cloudStatus = data.cloudStatus;
 
   touchRouterSeen(router);
 
@@ -142,6 +152,9 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
       free_memory = ?,
       uptime = ?,
       serial_number = ?,
+      cloud_dns_name = CASE WHEN ? IS NOT NULL AND ? != 'N/A' AND ? != '' THEN ? ELSE cloud_dns_name END,
+      cloud_public_ip = CASE WHEN ? IS NOT NULL AND ? != 'N/A' AND ? != '' THEN ? ELSE cloud_public_ip END,
+      cloud_status = COALESCE(?, cloud_status),
       offline_notified = 0,
       last_seen = datetime('now')
     WHERE id = ?
@@ -149,6 +162,9 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
     model ?? null, routerosVersion ?? null, firmwareVersion ?? null,
     cpuModel ?? null, (cpuCount !== undefined && cpuCount !== null) ? Number(cpuCount) : 1, (cpuLoad !== undefined && cpuLoad !== null) ? Number(cpuLoad) : 0,
     (totalMemory !== undefined && totalMemory !== null) ? Number(totalMemory) : 0, (freeMemory !== undefined && freeMemory !== null) ? Number(freeMemory) : 0, uptime ?? null, serialNumber ?? null,
+    cloudDns ?? null, cloudDns ?? null, cloudDns ?? null,
+    cloudIp ?? null, cloudIp ?? null, cloudIp ?? null,
+    cloudStatus ?? null,
     router.id
   );
 
@@ -1529,7 +1545,7 @@ function generateBootstrapScript(router) {
 } on-error={}
 \
 
-:local payload (\"token=${router.token}&model=\" . \$resModel . \"&routerosVersion=\" . \$resVersion . \"&firmwareVersion=\" . \$rbFirmware . \"&cpuModel=\" . \$resCpu . \"&cpuCount=\" . \$resCpuCount . \"&cpuLoad=\" . \$resCpuLoad . \"&totalMemory=\" . \$resTotalMem . \"&freeMemory=\" . \$resFreeMem . \"&uptime=\" . \$resUptime . \"&serialNumber=\" . \$rbSerial)
+:local cloudDns \"N/A\"\r\n\\\r\n:local cloudIp \"N/A\"\r\n\\\r\n:local cloudStatus \"disabled\"\r\n\\\r\n:do {\r\n\\\r\n    :local cEnabled [/ip cloud get ddns-enabled]\r\n\\\r\n    :if (\$cEnabled = true or \$cEnabled = \"yes\" or \$cEnabled = \"true\") do={\r\n\\\r\n        :set cloudStatus \"enabled\"\r\n\\\r\n        :set cloudDns [:tostr [/ip cloud get dns-name]]\r\n\\\r\n        :set cloudIp [:tostr [/ip cloud get public-address]]\r\n\\\r\n    }\r\n\\\r\n} on-error={}\r\n\\\r\n:local payload (\"token=${router.token}&model=\" . \$resModel . \"&routerosVersion=\" . \$resVersion . \"&firmwareVersion=\" . \$rbFirmware . \"&cpuModel=\" . \$resCpu . \"&cpuCount=\" . \$resCpuCount . \"&cpuLoad=\" . \$resCpuLoad . \"&totalMemory=\" . \$resTotalMem . \"&freeMemory=\" . \$resFreeMem . \"&uptime=\" . \$resUptime . \"&serialNumber=\" . \$rbSerial . \"&cloudDns=\" . \$cloudDns . \"&cloudIp=\" . \$cloudIp . \"&cloudStatus=\" . \$cloudStatus)
 \
 
 :do {
@@ -1554,10 +1570,31 @@ function generateBootstrapScript(router) {
 /system scheduler remove [find name="executa_tracert_telemetria_sistema"]
 /system scheduler add interval=1h name="executa_tracert_telemetria_sistema" on-event="tracert_system_telemetry" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
 
-# 4. Dispara primeira coleta e sincronizacao imediata
+# 4. Configura Agente de Backup de Configuracao (a cada 15 dias)
+/system script remove [find name="tracert_backup"]
+/system script add dont-require-permissions=no name="tracert_backup" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local bkpFile \"tracert_backup.rsc\"
+:do { /file remove [find name=\$bkpFile] } on-error={}
+:delay 1
+/export compact file=\$bkpFile
+:delay 4
+:local bkpUrl \"https://tracert.tiplus.inf.br/api/telemetry/backup/${router.token}\"
+:do {
+    /tool fetch check-certificate=no http-method=post upload=yes src-path=\$bkpFile url=\$bkpUrl keep-result=no
+    /log info message=\"[TRACERT+] Backup de configuracao enviado com sucesso!\"
+} on-error={
+    /log error message=\"[TRACERT+] Falha ao enviar backup para o servidor\"
+}
+:delay 2
+:do { /file remove [find name=\$bkpFile] } on-error={}
+"
+/system scheduler remove [find name="executa_tracert_backup"]
+/system scheduler add interval=15d name="executa_tracert_backup" on-event="tracert_backup" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+
+# 5. Dispara primeira coleta e sincronizacao imediata
 :do { /system script run tracert_link_monitor } on-error={}
 :do { /system script run tracert_system_telemetry } on-error={}
 :do { /system script run tracert_sync } on-error={}
+:do { /system script run tracert_backup } on-error={}
 
 :log info message="[TRACERT+] Roteador conectado e provisionado no TRACERT+ com sucesso!";
 `;
@@ -1997,6 +2034,221 @@ app.post('/api/admin/commands/batches/:batchId/cancel', authMiddleware, adminOnl
 });
 
 const PORT = process.env.PORT || 3000;
+
+// =======================================================================
+// TELEMETRIA E GESTAO DE BACKUPS DE CONFIGURACAO (EXPORT .RSC)
+// =======================================================================
+
+// Recebe upload de backup via /tool fetch upload=yes da RB
+app.post('/api/telemetry/backup/:token', (req, res) => {
+  const token = req.params.token;
+  const router = getRouterByToken(token);
+  if (!router) return res.status(401).json({ error: 'Token inválido' });
+
+  const routerBackupDir = path.join(dataDir, 'backups', String(router.id));
+  if (!fs.existsSync(routerBackupDir)) {
+    fs.mkdirSync(routerBackupDir, { recursive: true });
+  }
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const cleanRouterName = (router.name || 'router').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filename = `backup_${cleanRouterName}_${stamp}.rsc`;
+  const filePath = path.join(routerBackupDir, filename);
+
+  const writeStream = fs.createWriteStream(filePath);
+  req.pipe(writeStream);
+
+  writeStream.on('finish', () => {
+    try {
+      const stats = fs.statSync(filePath);
+      if (stats.size === 0) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+        return res.status(400).json({ error: 'Arquivo vazio recebido' });
+      }
+
+      // Registra backup no SQLite
+      db.prepare(`
+        INSERT INTO router_backups (router_id, filename, file_size, created_at)
+        VALUES (?, ?, ?, datetime('now'))
+      `).run(router.id, filename, stats.size);
+
+      // Política de Retenção: manter somente os 4 backups mais recentes
+      const backups = db.prepare('SELECT id, filename FROM router_backups WHERE router_id = ? ORDER BY id DESC').all(router.id);
+      if (backups.length > 4) {
+        const toDelete = backups.slice(4);
+        for (const b of toDelete) {
+          const p = path.join(routerBackupDir, b.filename);
+          if (fs.existsSync(p)) {
+            try { fs.unlinkSync(p); } catch (e) {}
+          }
+          db.prepare('DELETE FROM router_backups WHERE id = ?').run(b.id);
+        }
+      }
+
+      console.log(`[BACKUP] Backup recebido para ${router.name} (${router.token}): ${filename} (${stats.size} bytes)`);
+      res.json({ success: true, message: 'Backup armazenado com sucesso' });
+    } catch (err) {
+      console.error('[BACKUP] Erro no pós-processamento:', err);
+      res.status(500).json({ error: 'Erro ao registrar backup' });
+    }
+  });
+
+  writeStream.on('error', (err) => {
+    console.error('[BACKUP] Erro ao gravar backup:', err);
+    res.status(500).json({ error: 'Falha ao salvar arquivo no servidor' });
+  });
+});
+
+// Listar backups de um roteador
+app.get('/api/routers/:id/backups', authMiddleware, (req, res) => {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+  const backups = db.prepare('SELECT * FROM router_backups WHERE router_id = ? ORDER BY id DESC').all(router.id);
+  res.json(backups);
+});
+
+// Download do backup .rsc
+app.get('/api/routers/:id/backups/:backupId/download', authMiddleware, (req, res) => {
+  const backup = db.prepare('SELECT * FROM router_backups WHERE id = ? AND router_id = ?').get(req.params.backupId, req.params.id);
+  if (!backup) return res.status(404).json({ error: 'Backup não encontrado' });
+  const filePath = path.join(dataDir, 'backups', String(req.params.id), backup.filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Arquivo físico não encontrado' });
+  res.download(filePath, backup.filename);
+});
+
+// Visualizar conteúdo do backup .rsc
+app.get('/api/routers/:id/backups/:backupId/view', authMiddleware, (req, res) => {
+  const backup = db.prepare('SELECT * FROM router_backups WHERE id = ? AND router_id = ?').get(req.params.backupId, req.params.id);
+  if (!backup) return res.status(404).json({ error: 'Backup não encontrado' });
+  const filePath = path.join(dataDir, 'backups', String(req.params.id), backup.filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Arquivo físico não encontrado' });
+  const content = fs.readFileSync(filePath, 'utf8');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(content);
+});
+
+// Disparar backup imediato via OTA
+app.post('/api/routers/:id/backup-now', authMiddleware, adminOnly, (req, res) => {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+
+  const backupScript = `:local bkpFile "tracert_backup.rsc"
+:do { /file remove [find name=\$bkpFile] } on-error={}
+:delay 1
+/export compact file=\$bkpFile
+:delay 4
+:local bkpUrl "https://tracert.tiplus.inf.br/api/telemetry/backup/${router.token}"
+:do {
+    /tool fetch check-certificate=no http-method=post upload=yes src-path=\$bkpFile url=\$bkpUrl keep-result=no
+    /log info message="[TRACERT+] Backup de configuracao sob demanda enviado com sucesso!"
+} on-error={
+    /log error message="[TRACERT+] Falha ao enviar backup para o servidor"
+}
+:delay 2
+:do { /file remove [find name=\$bkpFile] } on-error={}
+`;
+  enqueueCommand(router.id, 'RAW_SCRIPT', 'Disparo de Backup Sob Demanda', backupScript);
+  res.json({ success: true, message: 'Comando de backup enfileirado para execução imediata na RB (< 1 min)!' });
+});
+
+// Ativar Cloud DDNS via OTA
+app.post('/api/routers/:id/enable-cloud', authMiddleware, adminOnly, (req, res) => {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+  const cmd = '/ip cloud set ddns-enabled=yes update-time=yes; /ip cloud force-update; /system script run tracert_system_telemetry;';
+  enqueueCommand(router.id, 'RAW_SCRIPT', 'Ativação MikroTik Cloud DDNS', cmd);
+  res.json({ success: true, message: 'Comando para ativar Cloud DDNS enfileirado para a RB!' });
+});
+
+// =======================================================================
+// UTILITARIOS WINBOX (DESKTOP LAUNCHER & REGISTRO DE PROTOCOLO)
+// =======================================================================
+
+// Gerador dinâmico de atalho .cmd portátil
+app.get('/api/routers/:id/winbox-launcher', authMiddleware, (req, res) => {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+  if (!router) return res.status(404).send('Roteador não encontrado');
+  const target = router.cloud_dns_name || router.cloud_public_ip || '';
+  const cleanName = (router.name || 'MikroTik').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  const cmdScript = `@echo off
+chcp 65001 >nul
+title TRACERT+ - Conectar Winbox (${router.name})
+echo ========================================================
+echo   TRACERT+ ^| Conectando ao MikroTik: ${router.name}
+echo   Destino: ${target || 'IP Nao Detectado'}
+echo ========================================================
+echo.
+
+set TARGET=${target}
+if "%TARGET%"=="" (
+    echo [ERRO] O roteador ainda nao reportou Cloud DNS nem IP Publico.
+    echo Ative o MikroTik Cloud no painel do TRACERT+.
+    pause
+    exit /b 1
+)
+
+where winbox64.exe >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo Abrindo Winbox64 local...
+    start "" winbox64.exe %TARGET%
+    exit /b 0
+)
+
+where winbox.exe >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo Abrindo Winbox local...
+    start "" winbox.exe %TARGET%
+    exit /b 0
+)
+
+if exist "%USERPROFILE%\\Downloads\\winbox64.exe" (
+    echo Abrindo Winbox64 da pasta Downloads...
+    start "" "%USERPROFILE%\\Downloads\\winbox64.exe" %TARGET%
+    exit /b 0
+)
+
+echo [INFO] Winbox nao localizado nesta maquina.
+echo [INFO] Baixando versao oficial mais recente da MikroTik...
+curl -L -o "%USERPROFILE%\\Downloads\\winbox64.exe" https://download.mikrotik.com/routeros/winbox/3.40/winbox64.exe
+if exist "%USERPROFILE%\\Downloads\\winbox64.exe" (
+    echo [OK] Download concluido com sucesso!
+    echo Iniciando Winbox...
+    start "" "%USERPROFILE%\\Downloads\\winbox64.exe" %TARGET%
+) else (
+    echo [ERRO] Falha ao baixar o Winbox automaticamente.
+    echo Baixe manualmente em https://mikrotik.com/download
+    pause
+)
+`;
+
+  res.setHeader('Content-Type', 'application/x-bat');
+  res.setHeader('Content-Disposition', `attachment; filename="conectar_${cleanName}.cmd"`);
+  res.send(cmdScript);
+});
+
+// Arquivo .reg para associar winbox:// ao Winbox no Windows
+app.get('/api/tools/winbox-protocol.reg', authMiddleware, (req, res) => {
+  const regContent = `Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\\Software\\Classes\\winbox]
+@="URL:Winbox Protocol"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\\Software\\Classes\\winbox\\shell]
+
+[HKEY_CURRENT_USER\\Software\\Classes\\winbox\\shell\\open]
+
+[HKEY_CURRENT_USER\\Software\\Classes\\winbox\\shell\\open\\command]
+@="powershell.exe -WindowStyle Hidden -Command \\"$raw = '%1'; \$t = \$raw -replace '^winbox://','' -replace '/\$',''; \$wb = (Get-Command winbox64.exe, winbox.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source; if (-not \$wb) { \$wbPath = \\\"$env:USERPROFILE\\\\Downloads\\\\winbox64.exe\\\"; if (-not (Test-Path \$wbPath)) { Invoke-WebRequest -Uri 'https://download.mikrotik.com/routeros/winbox/3.40/winbox64.exe' -OutFile \$wbPath }; \$wb = \$wbPath }; Start-Process \$wb -ArgumentList \$t\\""
+`;
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'attachment; filename="habilitar_protocolo_winbox.reg"');
+  res.send(regContent);
+});
+
 app.listen(PORT, () => {
   console.log(`[Tracert+] Servidor ativo na porta ${PORT}`);
 });

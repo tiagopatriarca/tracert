@@ -814,17 +814,33 @@ async function carregarAdminRouters() {
       : '<span style="background: #f1f5f9; color: #475569; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 6px;">1 Link (Monitor)</span>';
 
     const cleanRouterName = (r.name || '').replace(/'/g, "\\'");
+    const hasDns = r.cloud_dns_name && r.cloud_dns_name !== 'N/A' && r.cloud_dns_name !== '';
+    const hasIp = r.cloud_public_ip && r.cloud_public_ip !== 'N/A' && r.cloud_public_ip !== '';
+    let cloudCellHtml = '';
+    if (hasDns) {
+      cloudCellHtml = `<div style="font-weight:700; color:#0284c7; cursor:pointer;" onclick="abrirModalWinbox(${r.id})" title="Clique para conectar via Winbox">⚡ ${escapeHtml(r.cloud_dns_name)}</div>`;
+      if (hasIp) {
+        cloudCellHtml += `<div style="font-size:11px; color:#16a34a; font-family:monospace;">IP: ${escapeHtml(r.cloud_public_ip)}</div>`;
+      }
+    } else if (hasIp) {
+      cloudCellHtml = `<div style="font-weight:700; color:#0f172a; cursor:pointer;" onclick="abrirModalWinbox(${r.id})" title="Clique para conectar via Winbox">⚡ IP: ${escapeHtml(r.cloud_public_ip)}</div>`;
+    } else {
+      cloudCellHtml = `<span style="color:#94a3b8; font-size:11.5px;">Cloud Inativo <button onclick="ativarCloudOTA(${r.id})" style="border:none; background:none; color:#0284c7; cursor:pointer; font-size:11px; text-decoration:underline;">(Ativar)</button></span>`;
+    }
     const cleanRouterModel = (r.model || '').replace(/'/g, "\\'");
     tr.innerHTML = `
       <td style="padding: 10px; font-weight: 600;">${escapeHtml(r.client_name)}</td>
       <td style="padding: 10px; font-weight: 600;">${escapeHtml(r.name)} ${sdwanBadge}</td>
+      <td style="padding: 10px; font-size: 12px;">${cloudCellHtml}</td>
       <td style="padding: 10px; font-weight: 600; color: #4f46e5;">${escapeHtml(board)}</td>
       <td style="padding: 10px; font-size: 12px; color: #334155;">${escapeHtml(osVer)} <br><span style="color:#64748b;">${escapeHtml(fwVer)}</span></td>
       <td style="padding: 10px; font-size: 12px; color: #334155;">${escapeHtml(cpuInfo)} <br><span style="color:#64748b;">${escapeHtml(memInfo)}</span></td>
       <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${escapeHtml(r.token)}</code></td>
       <td style="padding: 10px; text-align: right;">
-        <button onclick="copiarScriptBootstrap(${r.id}, this)" style="border:1px solid #bae6fd; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:8px; transition:all 0.2s;" title="Copiar Script de Ativação Universal para Área de Transferência">📋 Copiar Ativação</button>
-        <button onclick="abrirModalFailover(${r.id})" style="border:1px solid #fed7aa; background:#fff7ed; color:#ea580c; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:8px; transition:all 0.2s;" title="Ver ou Copiar Script de Failover Multi-Link (v6 / v7)">🛡️ Failover</button>
+        <button onclick="abrirModalWinbox(${r.id})" style="border:1px solid #38bdf8; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:700; font-size:12px; margin-right:6px;" title="Abrir no Winbox (1 clique)">⚡ Winbox</button>
+        <button onclick="abrirModalBackups(${r.id})" style="border:1px solid #cbd5e1; background:#f8fafc; color:#334155; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px;" title="Ver Backups Periódicos (15 dias / retenção de 4)">💾 Backups</button>
+        <button onclick="copiarScriptBootstrap(${r.id}, this)" style="border:1px solid #bae6fd; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px; transition:all 0.2s;" title="Copiar Script de Ativação Universal">📋 Ativação</button>
+        <button onclick="abrirModalFailover(${r.id})" style="border:1px solid #fed7aa; background:#fff7ed; color:#ea580c; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px; transition:all 0.2s;" title="Ver ou Copiar Script de Failover Multi-Link (v6 / v7)">🛡️ Failover</button>
         <button onclick="abrirModalOTA(${r.id})" style="border:none; background:none; color:#10b981; cursor:pointer; font-weight:600; margin-right:8px;" title="Gestão Remota e Comandos OTA">🔄 OTA</button>
         <button onclick="editarRouter(${r.id}, ${r.client_id}, '${cleanRouterName}', '${cleanRouterModel}', ${r.has_sdwan !== 0 ? 1 : 0})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
         <button onclick="excluirRouter(${r.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
@@ -1180,7 +1196,7 @@ function fecharModais() {
   const allModalIds = [
     'modal-timeline', 'modal-graficos', 'modal-grupo', 'modal-usuario',
     'modal-cliente', 'modal-router', 'modal-sdwan-destino', 'modal-ota',
-    'modal-batch-details', 'modal-bootstrap', 'modal-failover'
+    'modal-batch-details', 'modal-bootstrap', 'modal-failover', 'modal-winbox', 'modal-router-backups', 'modal-view-backup'
   ];
   allModalIds.forEach(id => {
     const el = document.getElementById(id);
@@ -1795,4 +1811,211 @@ async function copiarTextoFailover() {
     document.execCommand('copy');
     alert(`Script de Failover (RouterOS ${currentFailoverTab}) copiado!`);
   }
+}
+
+
+// =======================================================================
+// GESTÃO WINBOX INTELIGENTE & BACKUPS PERIÓDICOS
+// =======================================================================
+let currentWinboxRouter = null;
+let currentBackupRouterId = null;
+let currentViewingBackupId = null;
+
+// Abrir modal de conexão Winbox
+function abrirModalWinbox(routerId) {
+  const router = (allRouters || []).find(r => r.id === routerId);
+  if (!router) return;
+  currentWinboxRouter = router;
+
+  document.getElementById('modal-winbox-title').innerText = `Conexão Winbox - ${router.name}`;
+  document.getElementById('modal-winbox-subtitle').innerText = `Cliente: ${router.client_name || 'N/A'} | Modelo: ${router.model || 'MikroTik'}`;
+
+  const targetInput = document.getElementById('winbox-target-input');
+  const badge = document.getElementById('winbox-cloud-status-badge');
+
+  const target = (router.cloud_dns_name && router.cloud_dns_name !== 'N/A')
+    ? router.cloud_dns_name
+    : (router.cloud_public_ip && router.cloud_public_ip !== 'N/A' ? router.cloud_public_ip : '');
+
+  targetInput.value = target || 'Aguardando telemetria / Ativar Cloud';
+
+  if (target) {
+    badge.innerHTML = `<span style="color: #16a34a; font-weight: 600;">● Cloud DDNS Ativo</span> | IP Atual: <strong>${router.cloud_public_ip || 'N/A'}</strong>`;
+  } else {
+    badge.innerHTML = `<span style="color: #ea580c; font-weight: 600;">● Cloud DDNS não detectado</span> - <button onclick="ativarCloudOTA(${router.id})" style="border:none; background:none; color:#0284c7; cursor:pointer; text-decoration:underline; font-weight:600;">Ativar DDNS via OTA na RB</button>`;
+  }
+
+  document.getElementById('modal-winbox').style.display = 'flex';
+}
+
+function abrirViaProtocoloWinbox() {
+  if (!currentWinboxRouter) return;
+  const target = (currentWinboxRouter.cloud_dns_name && currentWinboxRouter.cloud_dns_name !== 'N/A')
+    ? currentWinboxRouter.cloud_dns_name
+    : (currentWinboxRouter.cloud_public_ip || '');
+
+  if (!target) {
+    alert('Endereço IP ou DNS da RB ainda não identificado na telemetria.');
+    return;
+  }
+
+  // Tenta abrir o protocolo registrado winbox://
+  window.location.href = `winbox://${target}`;
+}
+
+function baixarWinboxLauncher(routerId) {
+  const rId = routerId || (currentWinboxRouter ? currentWinboxRouter.id : null);
+  if (!rId) return;
+  window.open(`/api/routers/${rId}/winbox/launcher.cmd`, '_blank');
+}
+
+function baixarRegistroWinbox() {
+  window.open('/api/tools/winbox-protocol.reg', '_blank');
+}
+
+function copiarEnderecoWinbox() {
+  const input = document.getElementById('winbox-target-input');
+  if (!input || !input.value) return;
+  navigator.clipboard.writeText(input.value).then(() => {
+    alert('Endereço copiado para a área de transferência!');
+  }).catch(() => {
+    input.select();
+    document.execCommand('copy');
+    alert('Endereço copiado!');
+  });
+}
+
+async function ativarCloudOTA(routerId) {
+  if (!confirm('Deseja ativar o MikroTik Cloud DDNS (/ip cloud set ddns-enabled=yes) neste equipamento via comando OTA?')) return;
+  try {
+    const res = await apiFetch(`/api/routers/${routerId}/enable-cloud`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'Comando enviado! A RB atualizará o IP Cloud no próximo ciclo (< 1 min).');
+      if (typeof carregarAdminRouters === 'function') carregarAdminRouters();
+    } else {
+      alert('Erro: ' + (data.error || 'Falha ao enfileirar comando'));
+    }
+  } catch (err) {
+    alert('Erro de comunicação: ' + err.message);
+  }
+}
+
+// -----------------------------------------------------------------------
+// BACKUPS PERIÓDICOS (15 DIAS / RETENÇÃO DE 4)
+// -----------------------------------------------------------------------
+async function abrirModalBackups(routerId) {
+  currentBackupRouterId = routerId;
+  const router = (allRouters || []).find(r => r.id === routerId);
+  const rName = router ? router.name : `RB #${routerId}`;
+
+  document.getElementById('modal-backups-title').innerText = `Backups de Configuração - ${rName}`;
+  document.getElementById('modal-backups-subtitle').innerText = router ? `Cliente: ${router.client_name || 'N/A'}` : '';
+
+  await carregarListaBackups(routerId);
+  document.getElementById('modal-router-backups').style.display = 'flex';
+}
+
+async function carregarListaBackups(routerId) {
+  const tbody = document.getElementById('backups-table-tbody');
+  tbody.innerHTML = '<tr><td colspan="4" style="padding:15px; text-align:center; color:#64748b;">Carregando backups...</td></tr>';
+
+  try {
+    const res = await apiFetch(`/api/routers/${routerId}/backups`);
+    const backups = await res.json();
+
+    if (!backups || backups.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:20px; text-align:center; color:#94a3b8;">Nenhum backup recebido ainda para este roteador.<br><span style="font-size:12px;">Backups automáticos rodam a cada 15 dias ou você pode clicar no botão acima para gerar agora.</span></td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    backups.forEach(b => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border-color)';
+
+      const dateStr = b.created_at ? new Date(b.created_at + 'Z').toLocaleString('pt-BR') : 'N/A';
+      const sizeKb = b.file_size ? (b.file_size / 1024).toFixed(1) + ' KB' : 'N/A';
+      const safeFilename = escapeHtml(b.filename);
+
+      tr.innerHTML = `
+        <td style="padding: 10px; font-weight: 600; color: #1e293b;">${dateStr}</td>
+        <td style="padding: 10px; font-family: monospace; font-size: 12px; color: #0284c7;">${safeFilename}</td>
+        <td style="padding: 10px; font-size: 12.5px; color: #475569;">${sizeKb}</td>
+        <td style="padding: 10px; text-align: right;">
+          <button onclick="visualizarBackup(${routerId}, ${b.id}, '${safeFilename}')" style="border:1px solid #bae6fd; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px;" title="Ver conteúdo do export RSC">👁️ Ver</button>
+          <button onclick="baixarBackup(${routerId}, ${b.id})" style="border:1px solid #cbd5e1; background:#f8fafc; color:#334155; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px;" title="Baixar arquivo .rsc">📥 Baixar</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" style="padding:15px; text-align:center; color:#ef4444;">Erro ao carregar backups: ${err.message}</td></tr>`;
+  }
+}
+
+async function dispararBackupImediato() {
+  if (!currentBackupRouterId) return;
+  if (!confirm('Deseja gerar e enviar um backup de configuração agora? A RB executará o /export compact e enviará o arquivo ao servidor TRACERT+ em até 1 minuto.')) return;
+
+  try {
+    const res = await apiFetch(`/api/routers/${currentBackupRouterId}/backup-now`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'Comando de backup enfileirado com sucesso!');
+      setTimeout(() => carregarListaBackups(currentBackupRouterId), 3000);
+    } else {
+      alert('Erro: ' + (data.error || 'Falha ao solicitar backup'));
+    }
+  } catch (err) {
+    alert('Erro de comunicação: ' + err.message);
+  }
+}
+
+function baixarBackup(routerId, backupId) {
+  window.open(`/api/routers/${routerId}/backups/${backupId}/download`, '_blank');
+}
+
+async function visualizarBackup(routerId, backupId, filename) {
+  currentBackupRouterId = routerId;
+  currentViewingBackupId = backupId;
+  document.getElementById('view-backup-filename').innerText = filename || `backup_${backupId}.rsc`;
+  const txtArea = document.getElementById('view-backup-content');
+  txtArea.value = 'Carregando conteúdo do arquivo RSC...';
+
+  document.getElementById('modal-router-backups').style.display = 'none';
+  document.getElementById('modal-view-backup').style.display = 'flex';
+
+  try {
+    const res = await apiFetch(`/api/routers/${routerId}/backups/${backupId}/view`);
+    const content = await res.text();
+    txtArea.value = content;
+  } catch (err) {
+    txtArea.value = 'Erro ao carregar conteúdo do backup: ' + err.message;
+  }
+}
+
+function fecharModalViewBackup() {
+  document.getElementById('modal-view-backup').style.display = 'none';
+  if (currentBackupRouterId) {
+    document.getElementById('modal-router-backups').style.display = 'flex';
+  }
+}
+
+function baixarBackupAtual() {
+  if (currentBackupRouterId && currentViewingBackupId) {
+    baixarBackup(currentBackupRouterId, currentViewingBackupId);
+  }
+}
+
+function copiarTextoBackupRsc() {
+  const txt = document.getElementById('view-backup-content');
+  if (!txt || !txt.value) return;
+  navigator.clipboard.writeText(txt.value).then(() => {
+    alert('Conteúdo do arquivo RSC copiado para a área de transferência!');
+  }).catch(() => {
+    txt.select();
+    document.execCommand('copy');
+    alert('Copiado!');
+  });
 }

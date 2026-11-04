@@ -370,6 +370,7 @@
               <tr style="text-align: left; border-bottom: 2px solid var(--border-color); color: #64748b;">
                 <th style="padding: 10px;">Cliente</th>
                 <th style="padding: 10px;">Nome do Roteador</th>
+                <th style="padding: 10px;">Cloud DDNS & IP</th>
                 <th style="padding: 10px;">Modelo / Board</th>
                 <th style="padding: 10px;">RouterOS / Firmware</th>
                 <th style="padding: 10px;">CPU / Memória</th>
@@ -801,6 +802,128 @@
           <div style="display: flex; gap: 10px;">
             <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 10px 18px; font-size: 13.5px; cursor: pointer;">Fechar</button>
             <button class="btn-primary" onclick="copiarTextoFailover()" style="padding: 10px 18px; font-size: 13.5px; cursor:pointer;">📋 Copiar Script (<span id="modal-fo-copy-lbl">v7</span>)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- MODAL: Conexão Winbox Inteligente -->
+  <div id="modal-winbox" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 580px;">
+      <div class="dialog-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 24px;">⚡</span>
+          <div>
+            <h2 id="modal-winbox-title" class="dialog-title" style="margin: 0;">Conexão Winbox</h2>
+            <div id="modal-winbox-subtitle" style="font-size: 12px; color: #64748b;">Roteador: Carregando...</div>
+          </div>
+        </div>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; margin-bottom: 18px;">
+          <div style="font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; margin-bottom: 8px;">Endereço de Conexão Detectado</div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" id="winbox-target-input" readonly class="input-text" style="font-family: monospace; font-size: 13.5px; font-weight: 600; color: #0284c7; background: #fff;" value="">
+            <button class="btn-secondary" onclick="copiarEnderecoWinbox()" style="padding: 8px 14px; font-size: 12.5px; white-space: nowrap;">📋 Copiar</button>
+          </div>
+          <div id="winbox-cloud-status-badge" style="margin-top: 8px; font-size: 12px; color: #64748b;"></div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px;">
+          <!-- Opção 1: Abrir via Protocolo direto winbox:// -->
+          <div style="border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 8px; padding: 14px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 700; font-size: 13.5px; color: #1e40af;">Abrir no Winbox com 1 Clique</div>
+              <div style="font-size: 12px; color: #3b82f6;">Usa o protocolo <code>winbox://</code> associado no seu Windows.</div>
+            </div>
+            <button id="btn-winbox-protocol" class="btn-primary" onclick="abrirViaProtocoloWinbox()" style="padding: 8px 16px; font-size: 13px; font-weight: 700; background: #2563eb;">🚀 Abrir Winbox</button>
+          </div>
+
+          <!-- Opção 2: Baixar Launcher .cmd Portátil (Sem Instalação) -->
+          <div style="border: 1px solid #e2e8f0; background: #fff; border-radius: 8px; padding: 14px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 700; font-size: 13.5px; color: #1e293b;">Launcher Portátil (.cmd)</div>
+              <div style="font-size: 12px; color: #64748b;">Localiza o Winbox no seu PC ou baixa o Winbox64 oficial e abre direto.</div>
+            </div>
+            <button class="btn-secondary" onclick="baixarWinboxLauncher()" style="padding: 8px 16px; font-size: 12.5px; font-weight: 600; border-color: #cbd5e1;">📥 Baixar .cmd</button>
+          </div>
+        </div>
+
+        <!-- Dica de Registro do Protocolo -->
+        <div style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 11.5px; color: #475569; display: flex; justify-content: space-between; align-items: center;">
+          <span>💡 Quer que os links <code>winbox://</code> abram direto no navegador?</span>
+          <button onclick="baixarRegistroWinbox()" style="border: none; background: none; color: #0284c7; font-weight: 700; cursor: pointer; text-decoration: underline; font-size: 12px;">Habilitar no Windows (.reg)</button>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; margin-top: 18px;">
+          <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 8px 20px; font-size: 13px;">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Gestão de Backups Periódicos (15 dias / retenção de 4) -->
+  <div id="modal-router-backups" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 760px;">
+      <div class="dialog-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 24px;">💾</span>
+          <div>
+            <h2 id="modal-backups-title" class="dialog-title" style="margin: 0;">Backups de Configuração MikroTik</h2>
+            <div id="modal-backups-subtitle" style="font-size: 12px; color: #64748b;">Roteador: Carregando...</div>
+          </div>
+        </div>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+          <div style="font-size: 12.5px; color: #475569; max-width: 500px;">
+            <strong style="color: #0f172a;">Política Automática:</strong> Export compacto gerado a cada <strong>15 dias</strong> pela RB. Retenção rigorosa no TRACERT+: são mantidos apenas os <strong>últimos 4 backups</strong>.
+          </div>
+          <button class="btn-primary" onclick="dispararBackupImediato()" style="font-size: 12.5px; padding: 8px 14px;">⚡ Gerar Backup Agora (OTA)</button>
+        </div>
+
+        <div style="max-height: 280px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 16px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;" id="backups-table">
+            <thead>
+              <tr style="background: #f1f5f9; text-align: left; color: #475569; position: sticky; top: 0;">
+                <th style="padding: 10px;">Data / Hora</th>
+                <th style="padding: 10px;">Arquivo de Export (.rsc)</th>
+                <th style="padding: 10px;">Tamanho</th>
+                <th style="padding: 10px; text-align: right;">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="backups-table-tbody"></tbody>
+          </table>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end;">
+          <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 8px 20px; font-size: 13px;">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Visualizador de Arquivo de Backup RSC -->
+  <div id="modal-view-backup" class="timeline-modal" style="display: none;">
+    <div class="timeline-dialog" style="max-width: 820px;">
+      <div class="dialog-header">
+        <div>
+          <h2 id="view-backup-title" class="dialog-title" style="margin: 0;">Visualizar Export RSC</h2>
+          <div id="view-backup-filename" style="font-size: 12px; color: #64748b; font-family: monospace;"></div>
+        </div>
+        <button onclick="fecharModalViewBackup()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <textarea id="view-backup-content" readonly class="code-editor-area" style="height: 380px; font-family: monospace; font-size: 12px; margin-bottom: 14px; white-space: pre;"></textarea>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <button class="btn-secondary" onclick="fecharModalViewBackup()">Voltar aos Backups</button>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn-secondary" onclick="copiarTextoBackupRsc()">📋 Copiar Tudo</button>
+            <button id="btn-download-from-view" class="btn-primary" onclick="baixarBackupAtual()">📥 Baixar Arquivo</button>
           </div>
         </div>
       </div>

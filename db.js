@@ -205,6 +205,30 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_router_commands_pending ON router_commands(router_id, status);
   `);
 
+  // Backups de Configuracoes (Export .rsc)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS router_backups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      filename TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (router_id) REFERENCES routers(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_router_backups_router_id ON router_backups(router_id);
+  `);
+
+  try {
+    db.exec("ALTER TABLE routers ADD COLUMN cloud_dns_name TEXT;");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE routers ADD COLUMN cloud_public_ip TEXT;");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE routers ADD COLUMN cloud_status TEXT DEFAULT 'disabled';");
+  } catch (e) {}
+
+
   try {
     db.exec("ALTER TABLE routers ADD COLUMN has_sdwan INTEGER DEFAULT 1;");
   } catch (e) {}
