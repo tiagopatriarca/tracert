@@ -200,7 +200,9 @@ No menu lateral, acesse **Configurações WhatsApp**:
 
 ### Passo 2: Roteadores com Múltiplos Links (Failover & SD-WAN)
 1. Certifique-se de que cada rota default em `/ip route` possui o comentário identificador da operadora (veja a seção [Padrões de Nomenclatura](#-padrões-de-nomenclatura-no-routeros)).
-2. No painel do TRACERT+, abra os detalhes do roteador e clique em **Gerar Script de Ativação** (ou utilize o arquivo oficial [failover_setup_and_monitor.rsc](mikrotik/failover_setup_and_monitor.rsc)).
+2. No painel do TRACERT+, abra os detalhes do roteador e clique em **Gerar Script de Ativação** ou use o script de failover específico para a sua versão:
+   - Para RouterOS v7: [failover_setup_and_monitor_v7.rsc](mikrotik/failover_setup_and_monitor_v7.rsc) (com tabelas FIB e immediate-gw).
+   - Para RouterOS v6: [failover_setup_and_monitor_v6.rsc](mikrotik/failover_setup_and_monitor_v6.rsc) (com routing-mark e /ip route rule).
 3. Cole o script no **Terminal do Winbox**.
 4. O script provisionará:
    - Rotas de teste isoladas para cada link.
@@ -253,8 +255,11 @@ tracert/
 │   ├── app.js
 │   └── styles.css
 └── mikrotik/                 # Scripts oficiais para MikroTik RouterOS
-    ├── failover_setup_and_monitor.rsc   # Script Universal v8 (Multi-WAN)
-    └── single_link_monitor.rsc          # Script para Roteadores de Link Único
+    ├── failover_setup_and_monitor_v7.rsc # Script Oficial para RouterOS v7 (FIB + immediate-gw)
+    ├── failover_setup_and_monitor_v6.rsc # Script Oficial para RouterOS v6 (routing-mark)
+    ├── failover_setup_and_monitor.rsc    # Script Universal / v7
+    ├── single_link_monitor.rsc           # Script para Roteadores de Link Único
+    └── tools/                            # Ferramentas e scripts auxiliares (.rsc)
 ```
 
 ---

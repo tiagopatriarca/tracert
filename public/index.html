@@ -277,7 +277,8 @@
                   🚀 Modelos Rápidos (Clique para preencher o script):
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                                    <button type="button" class="template-chip" onclick="aplicarTemplateMassa('failover')" style="background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; font-weight:700;">🛡️ Failover Multi-Link (Bendito v8)</button>
+                                    <button type="button" class="template-chip" onclick="aplicarTemplateMassa('failover_v7')" style="background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; font-weight:700;" title="Failover Multi-Link para RouterOS v7 com tabelas FIB">🛡️ Failover (RouterOS v7)</button>
+                  <button type="button" class="template-chip" onclick="aplicarTemplateMassa('failover_v6')" style="background:#f0fdf4; color:#15803d; border-color:#bbf7d0; font-weight:700;" title="Failover Multi-Link para RouterOS v6 com routing-mark">🛡️ Failover (RouterOS v6)</button>
                   <button type="button" class="template-chip" onclick="aplicarTemplateMassa('single_link')" style="background:#f0fdf4; color:#15803d; border-color:#bbf7d0; font-weight:700;">📶 Monitor 1-Link WAN (Heartbeat)</button>
 <button type="button" class="template-chip" onclick="aplicarTemplateMassa('ntp')">🕒 NTP Brasil (Horário)</button>
                   <button type="button" class="template-chip" onclick="aplicarTemplateMassa('dns')">🌐 DNS Cloudflare & Google</button>
@@ -770,6 +771,37 @@
         <div style="display: flex; justify-content: flex-end; gap: 10px;">
           <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 10px 18px; font-size: 13.5px; cursor: pointer;">Fechar</button>
           <button class="btn-primary" onclick="copiarTextoBootstrap()" style="padding: 10px 18px; font-size: 13.5px;">📋 Copiar Script Completo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- MODAL: Script de Failover Multi-Link (v6 / v7) -->
+  <div id="modal-failover" class="timeline-modal" style="display: none;">
+    <div class="timeline-backdrop" onclick="fecharModais()"></div>
+    <div class="timeline-dialog" style="max-width: 720px;">
+      <div class="dialog-header">
+        <h2 id="modal-failover-title" class="dialog-title">Script de Failover Multi-Link</h2>
+        <button onclick="fecharModais()" style="background:none; border:none; font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+          <div style="font-size: 13px; color: #64748b;">
+            Roteador: <strong id="modal-failover-router-name" style="color: #0f172a;"></strong> | Versão Detectada: <span id="modal-failover-detected-version" class="status-badge" style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:12px; font-weight:600; font-size:12px;"></span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button type="button" id="btn-fo-tab-v7" onclick="alternarAbaFailover('v7')" class="template-chip" style="font-weight:700; background:#0284c7; color:#fff; cursor:pointer;">RouterOS v7</button>
+            <button type="button" id="btn-fo-tab-v6" onclick="alternarAbaFailover('v6')" class="template-chip" style="font-weight:700; background:#f1f5f9; color:#475569; cursor:pointer;">RouterOS v6</button>
+          </div>
+        </div>
+        <textarea id="modal-failover-script" readonly class="code-editor-area" style="height: 280px; margin-bottom: 16px; font-size: 12px; font-family: monospace;"></textarea>
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap:wrap; gap:10px;">
+          <span style="font-size: 12px; color: #64748b;">Cole diretamente no Terminal do Winbox ou SSH do MikroTik.</span>
+          <div style="display: flex; gap: 10px;">
+            <button type="button" class="btn-secondary" onclick="fecharModais()" style="padding: 10px 18px; font-size: 13.5px; cursor: pointer;">Fechar</button>
+            <button class="btn-primary" onclick="copiarTextoFailover()" style="padding: 10px 18px; font-size: 13.5px; cursor:pointer;">📋 Copiar Script (<span id="modal-fo-copy-lbl">v7</span>)</button>
+          </div>
         </div>
       </div>
     </div>

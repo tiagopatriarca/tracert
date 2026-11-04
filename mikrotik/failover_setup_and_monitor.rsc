@@ -1,6 +1,7 @@
 # =======================================================================
-# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL v8 UNIVERSAL)
-# Suporta: RouterOS v6 e RouterOS v7
+# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL - ROUTEROS v7 / UNIVERSAL)
+# Para RouterOS v6 exclusivo: mikrotik/failover_setup_and_monitor_v6.rsc
+# Para RouterOS v7 exclusivo: mikrotik/failover_setup_and_monitor_v7.rsc
 # Padrão de Identificação: Comentário em /ip route iniciando com "LINK - "
 # =======================================================================
 

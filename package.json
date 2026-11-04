@@ -1,5 +1,5 @@
 {
-  "name": "sdwan-manager",
+  "name": "tracert",
   "version": "1.0.0",
   "description": "Painel SD-WAN e Monitor de Links MikroTik Multi-Tenant",
   "main": "server.js",
