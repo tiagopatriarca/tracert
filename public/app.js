@@ -836,18 +836,90 @@ async function carregarAdminRouters() {
       <td style="padding: 10px; font-size: 12px; color: #334155;">${escapeHtml(osVer)} <br><span style="color:#64748b;">${escapeHtml(fwVer)}</span></td>
       <td style="padding: 10px; font-size: 12px; color: #334155;">${escapeHtml(cpuInfo)} <br><span style="color:#64748b;">${escapeHtml(memInfo)}</span></td>
       <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${escapeHtml(r.token)}</code></td>
-      <td style="padding: 10px; text-align: right;">
-        <button onclick="abrirModalWinbox(${r.id})" style="border:1px solid #38bdf8; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:700; font-size:12px; margin-right:6px;" title="Abrir no Winbox (1 clique)">⚡ Winbox</button>
-        <button onclick="abrirModalBackups(${r.id})" style="border:1px solid #cbd5e1; background:#f8fafc; color:#334155; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px;" title="Ver Backups Periódicos (15 dias / retenção de 4)">💾 Backups</button>
-        <button onclick="copiarScriptBootstrap(${r.id}, this)" style="border:1px solid #bae6fd; background:#f0f9ff; color:#0284c7; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px; transition:all 0.2s;" title="Copiar Script de Ativação Universal">📋 Ativação</button>
-        <button onclick="abrirModalFailover(${r.id})" style="border:1px solid #fed7aa; background:#fff7ed; color:#ea580c; padding:3px 8px; border-radius:4px; cursor:pointer; font-weight:600; font-size:12px; margin-right:6px; transition:all 0.2s;" title="Ver ou Copiar Script de Failover Multi-Link (v6 / v7)">🛡️ Failover</button>
-        <button onclick="abrirModalOTA(${r.id})" style="border:none; background:none; color:#10b981; cursor:pointer; font-weight:600; margin-right:8px;" title="Gestão Remota e Comandos OTA">🔄 OTA</button>
-        <button onclick="editarRouter(${r.id}, ${r.client_id}, '${cleanRouterName}', '${cleanRouterModel}', ${r.has_sdwan !== 0 ? 1 : 0})" style="border:none; background:none; color:#3b82f6; cursor:pointer; font-weight:600; margin-right:8px;">✏️ Editar</button>
-        <button onclick="excluirRouter(${r.id})" style="border:none; background:none; color:#ef4444; cursor:pointer; font-weight:600;">🗑️ Excluir</button>
+      <td class="router-actions-cell" style="padding: 10px;">
+        <div class="router-actions-wrap" id="actions-wrap-${r.id}">
+          <!-- Estado Recolhido (Padrão) -->
+          <div class="router-actions-collapsed" id="actions-col-${r.id}" style="display: inline-flex; align-items: center; gap: 6px;">
+            <button onclick="abrirModalWinbox(${r.id})" class="btn-action-pill btn-action-winbox" title="Conectar no Winbox (1 clique)">
+              ⚡ Winbox
+            </button>
+            <button onclick="toggleRouterActions(${r.id}, event)" class="btn-action-pill btn-action-toggle" id="btn-toggle-${r.id}" title="Mais ações para esta RB">
+              <span>Ações</span> <span class="chevron-icon">▾</span>
+            </button>
+          </div>
+
+          <!-- Estado Expandido em Linha Única -->
+          <div class="router-actions-expanded" id="actions-exp-${r.id}">
+            <button onclick="abrirModalWinbox(${r.id})" class="btn-action-pill btn-action-winbox" title="Conectar no Winbox (1 clique)">⚡ Winbox</button>
+            <button onclick="abrirModalBackups(${r.id})" class="btn-action-pill btn-action-backups" title="Ver Backups Periódicos (15 dias / retenção de 4)">💾 Backups</button>
+            <button onclick="copiarScriptBootstrap(${r.id}, this)" class="btn-action-pill btn-action-ativacao" title="Copiar Script de Ativação Universal">📋 Ativação</button>
+            <button onclick="abrirModalFailover(${r.id})" class="btn-action-pill btn-action-failover" title="Ver ou Copiar Script de Failover Multi-Link (v6 / v7)">🛡️ Failover</button>
+            <button onclick="abrirModalOTA(${r.id})" class="btn-action-pill btn-action-ota" title="Gestão Remota e Comandos OTA">🔄 OTA</button>
+            <button onclick="editarRouter(${r.id}, ${r.client_id}, '${cleanRouterName}', '${cleanRouterModel}', ${r.has_sdwan !== 0 ? 1 : 0})" class="btn-action-pill btn-action-edit" title="Editar Roteador">✏️ Editar</button>
+            <button onclick="excluirRouter(${r.id})" class="btn-action-pill btn-action-delete" title="Excluir Roteador">🗑️ Excluir</button>
+            <button onclick="toggleRouterActions(${r.id}, event)" class="btn-action-pill btn-action-close" title="Recolher ações">
+              <span>▴ Fechar</span>
+            </button>
+          </div>
+        </div>
       </td>
     `;
     tbody.appendChild(tr);
   });
+}
+
+
+// -----------------------------------------------------------------------
+// AÇÕES DO ROTEADOR: CONTROLE EXPANDIR / RECOLHER (UI/UX)
+// -----------------------------------------------------------------------
+let currentOpenActionRouterId = null;
+
+function toggleRouterActions(routerId, event) {
+  if (event) {
+    event.stopPropagation();
+    event.preventDefault();
+  }
+
+  const colEl = document.getElementById(`actions-col-${routerId}`);
+  const expEl = document.getElementById(`actions-exp-${routerId}`);
+  const btnToggle = document.getElementById(`btn-toggle-${routerId}`);
+
+  if (!colEl || !expEl) return;
+
+  const isCurrentlyOpen = expEl.classList.contains('open');
+
+  // Fecha qualquer outro que esteja aberto
+  fecharTodasAcoesRouters();
+
+  if (!isCurrentlyOpen) {
+    colEl.style.display = 'none';
+    expEl.classList.add('open');
+    if (btnToggle) btnToggle.classList.add('active');
+    currentOpenActionRouterId = routerId;
+  }
+}
+
+function fecharTodasAcoesRouters() {
+  document.querySelectorAll('.router-actions-expanded.open').forEach(el => {
+    el.classList.remove('open');
+  });
+  document.querySelectorAll('.router-actions-collapsed').forEach(el => {
+    el.style.display = 'inline-flex';
+  });
+  document.querySelectorAll('.btn-action-toggle.active').forEach(el => {
+    el.classList.remove('active');
+  });
+  currentOpenActionRouterId = null;
+}
+
+// Fechar ações automaticamente ao clicar fora
+if (typeof window !== 'undefined' && !window.__routerActionsListenerAttached) {
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.router-actions-wrap')) {
+      fecharTodasAcoesRouters();
+    }
+  });
+  window.__routerActionsListenerAttached = true;
 }
 
 async function abrirModalRouter() {

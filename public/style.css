@@ -519,3 +519,184 @@ body {
   min-height: 180px;
   box-sizing: border-box;
 }
+
+
+/* ==========================================================================
+   ROUTER ACTIONS EXPANDABLE / RETRACTABLE (UI/UX REDESIGN)
+   ========================================================================== */
+.router-actions-cell {
+  position: relative;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.router-actions-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  position: relative;
+}
+
+/* Botões base */
+.btn-action-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  border: 1px solid transparent;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn-action-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+}
+
+/* Winbox Quick Access */
+.btn-action-winbox {
+  background: #f0f9ff;
+  border-color: #38bdf8;
+  color: #0284c7;
+}
+.btn-action-winbox:hover {
+  background: #e0f2fe;
+  border-color: #0284c7;
+  color: #0369a1;
+}
+
+/* Toggle Expansion Button com Setinha */
+.btn-action-toggle {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+.btn-action-toggle:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #1e293b;
+}
+.btn-action-toggle.active {
+  background: #e2e8f0;
+  border-color: #64748b;
+  color: #0f172a;
+}
+.btn-action-toggle .chevron-icon {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+.btn-action-toggle.active .chevron-icon {
+  transform: rotate(180deg);
+}
+
+/* Container de botões expandidos em linha única */
+.router-actions-expanded {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  animation: actionsFadeSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.router-actions-expanded.open {
+  display: inline-flex;
+}
+
+@keyframes actionsFadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Variações de estilo dos botões */
+.btn-action-backups {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+.btn-action-backups:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.btn-action-ativacao {
+  background: #f0f9ff;
+  border-color: #bae6fd;
+  color: #0284c7;
+}
+.btn-action-ativacao:hover {
+  background: #e0f2fe;
+  border-color: #38bdf8;
+  color: #0369a1;
+}
+
+.btn-action-failover {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #ea580c;
+}
+.btn-action-failover:hover {
+  background: #ffedd5;
+  border-color: #fdba74;
+  color: #c2410c;
+}
+
+.btn-action-ota {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+.btn-action-ota:hover {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+  color: #047857;
+}
+
+.btn-action-edit {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+.btn-action-edit:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.btn-action-delete {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+.btn-action-delete:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.btn-action-close {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #64748b;
+  padding: 4px 6px;
+}
+.btn-action-close:hover {
+  background: #e2e8f0;
+  color: #334155;
+}
