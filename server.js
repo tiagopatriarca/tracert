@@ -1973,11 +1973,16 @@ app.post('/api/admin/commands/broadcast', authMiddleware, adminOnly, (req, res) 
   `);
 
   for (const r of routers) {
-    // Substitui automaticamente tokens genéricos pelo token exclusivo de cada RB
+    // Substitui automaticamente tokens e metadados exclusivos de cada RB
+    const cleanRouterName = (r.name || 'MikroTik').replace(/"/g, '');
     const personalizedScript = script
+      .replace(/\{\{TOKEN\}\}/gi, r.token)
+      .replace(/\{\{ROUTER_NAME\}\}/gi, cleanRouterName)
+      .replace(/\{\{ROUTER_ID\}\}/gi, String(r.id))
       .replace(/SEU_TOKEN_AQUI/g, r.token)
       .replace(/TOKEN_DO_ROTEADOR/g, r.token)
-      .replace(/MK-TOKEN-AQUI/g, r.token);
+      .replace(/MK-TOKEN-AQUI/g, r.token)
+      .replace(/<TOKEN>/g, r.token);
     insertCmd.run(r.id, cmdName, personalizedScript, batchId);
   }
 
@@ -2154,13 +2159,27 @@ app.post('/api/routers/:id/backup-now', authMiddleware, adminOnly, (req, res) =>
   res.json({ success: true, message: 'Comando de backup enfileirado para execução imediata na RB (< 1 min)!' });
 });
 
-// Ativar Cloud DDNS via OTA
+// Ativar Cloud DDNS via OTA com auto-atualização do script de telemetria
 app.post('/api/routers/:id/enable-cloud', authMiddleware, adminOnly, (req, res) => {
   const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
   if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
-  const cmd = '/ip cloud set ddns-enabled=yes update-time=yes; /ip cloud force-update; /system script run tracert_system_telemetry;';
-  enqueueCommand(router.id, 'RAW_SCRIPT', 'Ativação MikroTik Cloud DDNS', cmd);
-  res.json({ success: true, message: 'Comando para ativar Cloud DDNS enfileirado para a RB!' });
+
+  const cmd = `# 1. Ativa o Cloud DDNS no RouterOS
+/ip cloud set ddns-enabled=yes update-time=yes;
+:do { /ip cloud force-update } on-error={};
+
+# 2. Atualiza ou reinstala o script tracert_system_telemetry com suporte a Cloud DDNS
+/system script remove [find name="tracert_system_telemetry"];
+/system script add dont-require-permissions=no name="tracert_system_telemetry" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local resModel [/system resource get board-name]\\r\\n:local resVersion [/system resource get version]\\r\\n:local resCpu [/system resource get cpu]\\r\\n:local resCpuCount [:tostr [/system resource get cpu-count]]\\r\\n:local resCpuLoad [:tostr [/system resource get cpu-load]]\\r\\n:local resTotalMem [:tostr ([/system resource get total-memory] / 1048576)]\\r\\n:local resFreeMem [:tostr ([/system resource get free-memory] / 1048576)]\\r\\n:local resUptime [:tostr [/system resource get uptime]]\\r\\n:local rbFirmware \\\"N/A\\\"\\r\\n:local rbSerial \\\"N/A\\\"\\r\\n:do {\\r\\n    :set rbFirmware [/system routerboard get current-firmware]\\r\\n    :set rbSerial [/system routerboard get serial-number]\\r\\n} on-error={}\\r\\n:local cloudDns \\\"N/A\\\"\\r\\n:local cloudIp \\\"N/A\\\"\\r\\n:local cloudStatus \\\"disabled\\\"\\r\\n:do {\\r\\n    :local cEnabled [/ip cloud get ddns-enabled]\\r\\n    :if (\\$cEnabled = true or \\$cEnabled = \\\"yes\\\" or \\$cEnabled = \\\"true\\\") do={\\r\\n        :set cloudStatus \\\"enabled\\\"\\r\\n        :set cloudDns [:tostr [/ip cloud get dns-name]]\\r\\n        :set cloudIp [:tostr [/ip cloud get public-address]]\\r\\n    }\\r\\n} on-error={}\\r\\n:local payload (\\\"token=${router.token}&model=\\\" . \\$resModel . \\\"&routerosVersion=\\\" . \\$resVersion . \\\"&firmwareVersion=\\\" . \\$rbFirmware . \\\"&cpuModel=\\\" . \\$resCpu . \\\"&cpuCount=\\\" . \\$resCpuCount . \\\"&cpuLoad=\\\" . \\$resCpuLoad . \\\"&totalMemory=\\\" . \\$resTotalMem . \\\"&freeMemory=\\\" . \\$resFreeMem . \\\"&uptime=\\\" . \\$resUptime . \\\"&serialNumber=\\\" . \\$rbSerial . \\\"&cloudDns=\\\" . \\$cloudDns . \\\"&cloudIp=\\\" . \\$cloudIp . \\\"&cloudStatus=\\\" . \\$cloudStatus)\\r\\n:do {\\r\\n    /tool fetch check-certificate=no http-method=post http-header-field=\\\"Content-Type: application/x-www-form-urlencoded\\\" url=\\\"https://tracert.tiplus.inf.br/api/telemetry/system/${router.token}\\\" http-data=\\$payload keep-result=no\\r\\n    /log info message=(\\\"[TRACERT+] Telemetria enviada com sucesso!\\\")\\r\\n} on-error={}\\r\\n";
+
+# 3. Aguarda 10 segundos para a negociacao DNS com a nuvem MikroTik e dispara a telemetria
+:delay 10;
+:do { /system script run tracert_system_telemetry } on-error={};
+:log info message="[TRACERT+] Cloud DDNS ativado e telemetria disparada com sucesso!";
+`;
+
+  enqueueCommand(router.id, 'RAW_SCRIPT', 'Ativação MikroTik Cloud DDNS (com Auto-Update)', cmd);
+  res.json({ success: true, message: 'Comando para ativar Cloud DDNS e atualizar telemetria enfileirado para a RB (< 1 min)!' });
 });
 
 // =======================================================================
