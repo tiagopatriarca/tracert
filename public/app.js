@@ -2044,3 +2044,23 @@ function copiarTextoBackupRsc() {
     alert('Copiado!');
   });
 }
+
+
+// Enviar atualização de scripts Core pelo Modal OTA Individual
+async function enviarAtualizacaoScriptsCoreOTA() {
+  if (!currentOtaRouterId) return;
+  if (!confirm('Deseja atualizar todos os scripts desta RouterBoard (Telemetria com Cloud DDNS, Backup a cada 15 dias, Failover e Agente de Sync)?\\n\\nA RB puxará o pacote oficial atualizado no próximo ciclo (< 1 min).')) return;
+
+  try {
+    const res = await apiFetch(`/api/routers/${currentOtaRouterId}/update-scripts`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'Comando enfileirado com sucesso!');
+      carregarHistoricoOTA();
+    } else {
+      alert('Erro: ' + (data.error || 'Falha ao enfileirar'));
+    }
+  } catch (err) {
+    alert('Erro de comunicação: ' + err.message);
+  }
+}

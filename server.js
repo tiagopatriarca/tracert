@@ -140,6 +140,7 @@ app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) =
   const cloudStatus = data.cloudStatus;
 
   touchRouterSeen(router);
+  console.log(`[TELEMETRY] RB ${router.name} (${router.token}) recebido: CloudDNS=${cloudDns || 'N/A'}, CloudIP=${cloudIp || 'N/A'}, Status=${cloudStatus || 'N/A'}`);
 
   db.prepare(`
     UPDATE routers SET
@@ -1396,203 +1397,116 @@ function generateBootstrapScript(router) {
 
 # 1. Configura Agente de Sincronizacao Remota e OTA (Modelo 2)
 /system script remove [find name="tracert_sync"]
-/system script add dont-require-permissions=no name="tracert_sync" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local syncUrl \"https://tracert.tiplus.inf.br/api/routers/sync/${router.token}\"
-\
-
-:do {
-\
-
-    /tool fetch check-certificate=no url=\$syncUrl dst-path=\"tracert_sync.rsc\" keep-result=yes
-\
-
-    :local f [/file find name=\"tracert_sync.rsc\"]
-\
-
-    :if ([:len \$f] > 0) do={
-\
-
-        :local sz [/file get \$f size]
-\
-
-        :if (\$sz > 45) do={
-\
-
-            /import file-name=\"tracert_sync.rsc\"
-\
-
-            /log info message=\"[TRACERT+] Comandos OTA sincronizados e executados com sucesso!\"
-\
-
+/system script add dont-require-permissions=no name="tracert_sync" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local syncUrl "https://tracert.tiplus.inf.br/api/routers/sync/${router.token}"
+    :do {
+        /tool fetch check-certificate=no url=$syncUrl dst-path="tracert_sync.rsc" keep-result=yes
+        :local f [/file find name="tracert_sync.rsc"]
+        :if ([:len $f] > 0) do={
+            :local sz [/file get $f size]
+            :if ($sz > 45) do={
+                /import file-name="tracert_sync.rsc"
+                /log info message="[TRACERT+] Comandos OTA sincronizados e executados com sucesso!"
+            }
+            /file remove [find name="tracert_sync.rsc"]
         }
-\
-
-        /file remove [find name=\"tracert_sync.rsc\"]
-\
-
-    }
-\
-
-} on-error={}
-\
-
-"
+    } on-error={}
+}
 /system scheduler remove [find name="executa_tracert_sync"]
 /system scheduler add interval=1m name="executa_tracert_sync" on-event="tracert_sync" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
 
-# 2. Configura Monitor de Link WAN e Heartbeat (Captura comentário LINK - OPERADORA)
+# 2. Configura Monitor de Link WAN e Heartbeat
 /system script remove [find name="tracert_link_monitor"]
-/system script add dont-require-permissions=no name="tracert_link_monitor" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="# Busca o link de operadora pelo padrao de comentario
-\
-
-:local linkName \"\"
-\
-
-:foreach r in=[/ip route find dst-address=0.0.0.0/0] do={
-\
-
-    :local cmt [/ip route get \$r comment]
-\
-
-    :if ([:len \$cmt] > 0 and (\$cmt ~ \"[Ll][Ii][Nn][Kk]\") and !(\$cmt ~ \"!==\")) do={
-\
-
-        :local hashPos [:find \$cmt \"#\"]
-\
-
-        :if ([:typeof \$hashPos] = \"num\") do={ :set cmt [:pick \$cmt 0 \$hashPos] }
-\
-
-        :set linkName \$cmt
-\
-
+/system script add dont-require-permissions=no name="tracert_link_monitor" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local linkName ""
+    :foreach r in=[/ip route find dst-address=0.0.0.0/0] do={
+        :local cmt [/ip route get $r comment]
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+            :local hashPos [:find $cmt "#"]
+            :if ([:typeof $hashPos] = "num") do={ :set cmt [:pick $cmt 0 $hashPos] }
+            :set linkName $cmt
+        }
     }
-\
-
+    :if ($linkName = "") do={ :set linkName "LINK - PRINCIPAL" }
+    :local pings [/ping 8.8.8.8 count=2 interval=00:00:00.5]
+    :local score 8
+    :local st "UP"
+    :if ($pings = 0) do={ :set score 0; :set st "DOWN" }
+    :local payload ("token=${router.token}&link=" . $linkName . "&status=" . $st . "&score=" . [:tostr $score])
+    :do {
+        /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url="https://tracert.tiplus.inf.br/api/telemetry/failover/${router.token}" http-data=$payload keep-result=no
+    } on-error={}
 }
-\
-
-:if (\$linkName = \"\") do={ :set linkName \"LINK - PRINCIPAL\" }
-\
-
-:local pings [/ping 8.8.8.8 count=2 interval=00:00:00.5]
-\
-
-:local score 8
-\
-
-:local st \"UP\"
-\
-
-:if (\$pings = 0) do={ :set score 0; :set st \"DOWN\" }
-\
-
-:local payload (\"token=${router.token}&link=\" . \$linkName . \"&status=\" . \$st . \"&score=\" . [:tostr \$score])
-\
-
-:do {
-\
-
-    /tool fetch check-certificate=no http-method=post http-header-field=\"Content-Type: application/x-www-form-urlencoded\" url=\"https://tracert.tiplus.inf.br/api/telemetry/failover/${router.token}\" http-data=\$payload keep-result=no
-\
-
-} on-error={}
-\
-
-"
 /system scheduler remove [find name="executa_tracert_link_monitor"]
 /system scheduler add interval=1m name="executa_tracert_link_monitor" on-event="tracert_link_monitor" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
 
-# 3. Configura Agente de Telemetria de Hardware & Sistema
+# 3. Configura Agente de Telemetria de Hardware & Sistema (com Cloud DDNS e IP)
 /system script remove [find name="tracert_system_telemetry"]
-/system script add dont-require-permissions=no name="tracert_system_telemetry" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local resModel [/system resource get board-name]
-\
-
-:local resVersion [/system resource get version]
-\
-
-:local resCpu [/system resource get cpu]
-\
-
-:local resCpuCount [:tostr [/system resource get cpu-count]]
-\
-
-:local resCpuLoad [:tostr [/system resource get cpu-load]]
-\
-
-:local resTotalMem [:tostr ([/system resource get total-memory] / 1048576)]
-\
-
-:local resFreeMem [:tostr ([/system resource get free-memory] / 1048576)]
-\
-
-:local resUptime [:tostr [/system resource get uptime]]
-\
-
-:local rbFirmware \"N/A\"
-\
-
-:local rbSerial \"N/A\"
-\
-
-:do {
-\
-
-    :set rbFirmware [/system routerboard get current-firmware]
-\
-
-    :set rbSerial [/system routerboard get serial-number]
-\
-
-} on-error={}
-\
-
-:local cloudDns \"N/A\"\r\n\\\r\n:local cloudIp \"N/A\"\r\n\\\r\n:local cloudStatus \"disabled\"\r\n\\\r\n:do {\r\n\\\r\n    :local cEnabled [/ip cloud get ddns-enabled]\r\n\\\r\n    :if (\$cEnabled = true or \$cEnabled = \"yes\" or \$cEnabled = \"true\") do={\r\n\\\r\n        :set cloudStatus \"enabled\"\r\n\\\r\n        :set cloudDns [:tostr [/ip cloud get dns-name]]\r\n\\\r\n        :set cloudIp [:tostr [/ip cloud get public-address]]\r\n\\\r\n    }\r\n\\\r\n} on-error={}\r\n\\\r\n:local payload (\"token=${router.token}&model=\" . \$resModel . \"&routerosVersion=\" . \$resVersion . \"&firmwareVersion=\" . \$rbFirmware . \"&cpuModel=\" . \$resCpu . \"&cpuCount=\" . \$resCpuCount . \"&cpuLoad=\" . \$resCpuLoad . \"&totalMemory=\" . \$resTotalMem . \"&freeMemory=\" . \$resFreeMem . \"&uptime=\" . \$resUptime . \"&serialNumber=\" . \$rbSerial . \"&cloudDns=\" . \$cloudDns . \"&cloudIp=\" . \$cloudIp . \"&cloudStatus=\" . \$cloudStatus)
-\
-
-:do {
-\
-
-    /tool fetch check-certificate=no http-method=post http-header-field=\"Content-Type: application/x-www-form-urlencoded\" url=\"https://tracert.tiplus.inf.br/api/telemetry/system/${router.token}\" http-data=\$payload keep-result=no
-\
-
-    /log info message=(\"[TRACERT+] Telemetria de hardware enviada com sucesso!\")
-\
-
-} on-error={
-\
-
-    /log error message=(\"[TRACERT+] Falha ao enviar telemetria de hardware\")
-\
-
+/system script add dont-require-permissions=no name="tracert_system_telemetry" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local resModel [/system resource get board-name]
+    :local resVersion [/system resource get version]
+    :local resCpu [/system resource get cpu]
+    :local resCpuCount [:tostr [/system resource get cpu-count]]
+    :local resCpuLoad [:tostr [/system resource get cpu-load]]
+    :local resTotalMem [:tostr ([/system resource get total-memory] / 1048576)]
+    :local resFreeMem [:tostr ([/system resource get free-memory] / 1048576)]
+    :local resUptime [:tostr [/system resource get uptime]]
+    :local rbFirmware "N/A"
+    :local rbSerial "N/A"
+    :do {
+        :set rbFirmware [/system routerboard get current-firmware]
+        :set rbSerial [/system routerboard get serial-number]
+    } on-error={}
+    :local cloudDns "N/A"
+    :local cloudIp "N/A"
+    :local cloudStatus "disabled"
+    :do {
+        :local cEnabled [/ip cloud get ddns-enabled]
+        :if ($cEnabled = true or $cEnabled = "yes" or $cEnabled = "true") do={
+            :set cloudStatus "enabled"
+            :set cloudDns [:tostr [/ip cloud get dns-name]]
+            :set cloudIp [:tostr [/ip cloud get public-address]]
+        }
+    } on-error={}
+    :local payload ("token=${router.token}&model=" . $resModel . "&routerosVersion=" . $resVersion . "&firmwareVersion=" . $rbFirmware . "&cpuModel=" . $resCpu . "&cpuCount=" . $resCpuCount . "&cpuLoad=" . $resCpuLoad . "&totalMemory=" . $resTotalMem . "&freeMemory=" . $resFreeMem . "&uptime=" . $resUptime . "&serialNumber=" . $rbSerial . "&cloudDns=" . $cloudDns . "&cloudIp=" . $cloudIp . "&cloudStatus=" . $cloudStatus)
+    :do {
+        /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url="https://tracert.tiplus.inf.br/api/telemetry/system/${router.token}" http-data=$payload keep-result=no
+        /log info message=("[TRACERT+] Telemetria enviada com sucesso!")
+    } on-error={
+        /log error message=("[TRACERT+] Falha ao enviar telemetria")
+    }
 }
-\
-
-"
 /system scheduler remove [find name="executa_tracert_telemetria_sistema"]
 /system scheduler add interval=1h name="executa_tracert_telemetria_sistema" on-event="tracert_system_telemetry" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
 
 # 4. Configura Agente de Backup de Configuracao (a cada 15 dias)
 /system script remove [find name="tracert_backup"]
-/system script add dont-require-permissions=no name="tracert_backup" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local bkpFile \"tracert_backup.rsc\"
-:do { /file remove [find name=\$bkpFile] } on-error={}
-:delay 1
-/export compact file=\$bkpFile
-:delay 4
-:local bkpUrl \"https://tracert.tiplus.inf.br/api/telemetry/backup/${router.token}\"
-:do {
-    /tool fetch check-certificate=no http-method=post upload=yes src-path=\$bkpFile url=\$bkpUrl keep-result=no
-    /log info message=\"[TRACERT+] Backup de configuracao enviado com sucesso!\"
-} on-error={
-    /log error message=\"[TRACERT+] Falha ao enviar backup para o servidor\"
+/system script add dont-require-permissions=no name="tracert_backup" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local bkpFile "tracert_backup.rsc"
+    :do { /file remove [find name=$bkpFile] } on-error={}
+    :delay 1
+    /export compact file=$bkpFile
+    :delay 4
+    :local bkpUrl "https://tracert.tiplus.inf.br/api/telemetry/backup/${router.token}"
+    :do {
+        /tool fetch check-certificate=no http-method=post upload=yes src-path=$bkpFile url=$bkpUrl keep-result=no
+        /log info message="[TRACERT+] Backup de configuracao enviado com sucesso!"
+    } on-error={
+        /log error message="[TRACERT+] Falha ao enviar backup para o servidor"
+    }
+    :delay 2
+    :do { /file remove [find name=$bkpFile] } on-error={}
 }
-:delay 2
-:do { /file remove [find name=\$bkpFile] } on-error={}
-"
 /system scheduler remove [find name="executa_tracert_backup"]
 /system scheduler add interval=15d name="executa_tracert_backup" on-event="tracert_backup" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
 
-# 5. Dispara primeira coleta e sincronizacao imediata
+# 5. Ativa o Cloud DDNS no RouterOS
+/ip cloud set ddns-enabled=yes update-time=yes
+:do { /ip cloud force-update } on-error={}
+
+# 6. Dispara primeira coleta e sincronizacao imediata
 :do { /system script run tracert_link_monitor } on-error={}
+:delay 3
 :do { /system script run tracert_system_telemetry } on-error={}
 :do { /system script run tracert_sync } on-error={}
 :do { /system script run tracert_backup } on-error={}
@@ -2168,23 +2082,44 @@ app.post('/api/routers/:id/enable-cloud', authMiddleware, adminOnly, (req, res) 
 /ip cloud set ddns-enabled=yes update-time=yes;
 :do { /ip cloud force-update } on-error={};
 
-# 2. Atualiza ou reinstala o script tracert_system_telemetry com suporte a Cloud DDNS
-/system script remove [find name="tracert_system_telemetry"];
-/system script add dont-require-permissions=no name="tracert_system_telemetry" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":local resModel [/system resource get board-name]\\r\\n:local resVersion [/system resource get version]\\r\\n:local resCpu [/system resource get cpu]\\r\\n:local resCpuCount [:tostr [/system resource get cpu-count]]\\r\\n:local resCpuLoad [:tostr [/system resource get cpu-load]]\\r\\n:local resTotalMem [:tostr ([/system resource get total-memory] / 1048576)]\\r\\n:local resFreeMem [:tostr ([/system resource get free-memory] / 1048576)]\\r\\n:local resUptime [:tostr [/system resource get uptime]]\\r\\n:local rbFirmware \\\"N/A\\\"\\r\\n:local rbSerial \\\"N/A\\\"\\r\\n:do {\\r\\n    :set rbFirmware [/system routerboard get current-firmware]\\r\\n    :set rbSerial [/system routerboard get serial-number]\\r\\n} on-error={}\\r\\n:local cloudDns \\\"N/A\\\"\\r\\n:local cloudIp \\\"N/A\\\"\\r\\n:local cloudStatus \\\"disabled\\\"\\r\\n:do {\\r\\n    :local cEnabled [/ip cloud get ddns-enabled]\\r\\n    :if (\\$cEnabled = true or \\$cEnabled = \\\"yes\\\" or \\$cEnabled = \\\"true\\\") do={\\r\\n        :set cloudStatus \\\"enabled\\\"\\r\\n        :set cloudDns [:tostr [/ip cloud get dns-name]]\\r\\n        :set cloudIp [:tostr [/ip cloud get public-address]]\\r\\n    }\\r\\n} on-error={}\\r\\n:local payload (\\\"token=${router.token}&model=\\\" . \\$resModel . \\\"&routerosVersion=\\\" . \\$resVersion . \\\"&firmwareVersion=\\\" . \\$rbFirmware . \\\"&cpuModel=\\\" . \\$resCpu . \\\"&cpuCount=\\\" . \\$resCpuCount . \\\"&cpuLoad=\\\" . \\$resCpuLoad . \\\"&totalMemory=\\\" . \\$resTotalMem . \\\"&freeMemory=\\\" . \\$resFreeMem . \\\"&uptime=\\\" . \\$resUptime . \\\"&serialNumber=\\\" . \\$rbSerial . \\\"&cloudDns=\\\" . \\$cloudDns . \\\"&cloudIp=\\\" . \\$cloudIp . \\\"&cloudStatus=\\\" . \\$cloudStatus)\\r\\n:do {\\r\\n    /tool fetch check-certificate=no http-method=post http-header-field=\\\"Content-Type: application/x-www-form-urlencoded\\\" url=\\\"https://tracert.tiplus.inf.br/api/telemetry/system/${router.token}\\\" http-data=\\$payload keep-result=no\\r\\n    /log info message=(\\\"[TRACERT+] Telemetria enviada com sucesso!\\\")\\r\\n} on-error={}\\r\\n";
+# 2. Puxa a versao mais recente de todos os scripts oficiais do TRACERT+
+/tool fetch check-certificate=no url="https://tracert.tiplus.inf.br/api/routers/bootstrap/${router.token}/script.rsc" dst-path="tracert_update.rsc" keep-result=yes;
+:delay 3;
+/import file-name="tracert_update.rsc";
+:delay 2;
+:do { /file remove [find name="tracert_update.rsc"] } on-error={};
 
-# 3. Aguarda 10 segundos para a negociacao DNS com a nuvem MikroTik e dispara a telemetria
-:delay 10;
+# 3. Aguarda resolucao do DDNS e dispara a telemetria
+:delay 8;
 :do { /system script run tracert_system_telemetry } on-error={};
-:log info message="[TRACERT+] Cloud DDNS ativado e telemetria disparada com sucesso!";
-`;
+:log info message="[TRACERT+] Cloud DDNS ativado e scripts atualizados com sucesso!";`;
 
   enqueueCommand(router.id, 'RAW_SCRIPT', 'Ativação MikroTik Cloud DDNS (com Auto-Update)', cmd);
   res.json({ success: true, message: 'Comando para ativar Cloud DDNS e atualizar telemetria enfileirado para a RB (< 1 min)!' });
 });
 
-// =======================================================================
-// UTILITARIOS WINBOX (DESKTOP LAUNCHER & REGISTRO DE PROTOCOLO)
-// =======================================================================
+// Atualizar scripts Core do roteador individual via OTA
+app.post('/api/routers/:id/update-scripts', authMiddleware, adminOnly, (req, res) => {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
+  if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
+
+  const cmd = `# =======================================================================
+# ATUALIZACAO COMPLETA DE SCRIPTS TRACERT+ (${router.name})
+# =======================================================================
+/tool fetch check-certificate=no url="https://tracert.tiplus.inf.br/api/routers/bootstrap/${router.token}/script.rsc" dst-path="tracert_update.rsc" keep-result=yes;
+:delay 3;
+/import file-name="tracert_update.rsc";
+:delay 2;
+:do { /file remove [find name="tracert_update.rsc"] } on-error={};
+/ip cloud set ddns-enabled=yes update-time=yes;
+:do { /ip cloud force-update } on-error={};
+:delay 8;
+:do { /system script run tracert_system_telemetry } on-error={};
+:log info message="[TRACERT+] Todos os scripts foram atualizados com sucesso via OTA!";`;
+
+  enqueueCommand(router.id, 'RAW_SCRIPT', 'Atualização dos Scripts Tracert+ (Core)', cmd);
+  res.json({ success: true, message: 'Comando de atualização completa dos scripts enfileirado para a RB (< 1 min)!' });
+});
 
 // Gerador dinâmico de atalho .cmd portátil
 app.get('/api/routers/:id/winbox-launcher', authMiddleware, (req, res) => {
