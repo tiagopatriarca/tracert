@@ -119,7 +119,7 @@ function touchRouterSeen(router) {
 }
 
 // 1. Telemetria de Hardware e Sistema (/system resource e /system routerboard)
-app.post(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) => {
+app.all(['/api/telemetry/system', '/api/telemetry/system/:token'], (req, res) => {
   const token = req.params.token || req.query.token || (req.body && req.body.token);
   const router = getRouterByToken(token);
   if (!router) return res.status(401).json({ error: 'Token inválido' });
