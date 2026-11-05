@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db, initDatabase } from './db.js';
 import { sendEvolutionWhatsapp } from './whatsapp.js';
+import { startFtpServer } from './ftp_server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +21,7 @@ if (!fs.existsSync(backupsDir)) {
 
 
 initDatabase();
+startFtpServer(db, dataDir);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'TRACERT_PLUS_SECRET_KEY_2026_SECURE_NODE_TI';
 const app = express();
@@ -1499,9 +1501,8 @@ function generateBootstrapScript(router) {
     :delay 1
     /export compact file=$bkpFile
     :delay 4
-    :local bkpUrl "https://tracert.tiplus.inf.br/api/telemetry/backup/${router.token}"
     :do {
-        /tool fetch check-certificate=no http-method=post upload=yes src-path=$bkpFile url=$bkpUrl keep-result=no
+        /tool fetch mode=ftp address="shield.tiplus.inf.br" port=2121 user="${router.token}" password="pwd" src-path=$bkpFile dst-path=$bkpFile upload=yes
         /log info message="[TRACERT+] Backup de configuracao enviado com sucesso!"
     } on-error={
         /log error message="[TRACERT+] Falha ao enviar backup para o servidor"
@@ -2071,9 +2072,8 @@ app.post('/api/routers/:id/backup-now', authMiddleware, adminOnly, (req, res) =>
 :delay 1
 /export compact file=\$bkpFile
 :delay 4
-:local bkpUrl "https://tracert.tiplus.inf.br/api/telemetry/backup/${router.token}"
 :do {
-    /tool fetch check-certificate=no http-method=post upload=yes src-path=\$bkpFile url=\$bkpUrl keep-result=no
+    /tool fetch mode=ftp address="shield.tiplus.inf.br" port=2121 user="${router.token}" password="pwd" src-path=\$bkpFile dst-path=\$bkpFile upload=yes
     /log info message="[TRACERT+] Backup de configuracao sob demanda enviado com sucesso!"
 } on-error={
     /log error message="[TRACERT+] Falha ao enviar backup para o servidor"

@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     ports:
       - "3000"
+      - "2121:2121"
+      - "2122:2122"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.tracert.rule=Host(`tracert.tiplus.inf.br`)"
