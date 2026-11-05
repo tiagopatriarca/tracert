@@ -2082,7 +2082,8 @@ async function dispararBackupImediato() {
 }
 
 function baixarBackup(routerId, backupId) {
-  window.open(`/api/routers/${routerId}/backups/${backupId}/download`, '_blank');
+  const token = localStorage.getItem('token');
+  window.open(`/api/routers/${routerId}/backups/${backupId}/download?auth_token=${encodeURIComponent(token || '')}`, '_blank');
 }
 
 async function visualizarBackup(routerId, backupId, filename) {
