@@ -838,27 +838,39 @@ async function carregarAdminRouters() {
       <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${escapeHtml(r.token)}</code></td>
       <td class="router-actions-cell" style="padding: 10px;">
         <div class="router-actions-wrap" id="actions-wrap-${r.id}">
-          <!-- Estado Recolhido (Padrão) -->
-          <div class="router-actions-collapsed" id="actions-col-${r.id}" style="display: inline-flex; align-items: center; gap: 6px;">
-            <button onclick="abrirModalWinbox(${r.id})" class="btn-action-pill btn-action-winbox" title="Conectar no Winbox (1 clique)">
-              ⚡ Winbox
-            </button>
-            <button onclick="toggleRouterActions(${r.id}, event)" class="btn-action-pill btn-action-toggle" id="btn-toggle-${r.id}" title="Mais ações para esta RB">
-              <span>Ações</span> <span class="chevron-icon">▾</span>
-            </button>
-          </div>
+          <!-- Botão Rápido Winbox -->
+          <button onclick="abrirModalWinbox(${r.id})" class="btn-action-winbox-pill" title="Conectar no Winbox (1 clique)">
+            ⚡ Winbox
+          </button>
 
-          <!-- Estado Expandido em Linha Única -->
-          <div class="router-actions-expanded" id="actions-exp-${r.id}">
-            <button onclick="abrirModalWinbox(${r.id})" class="btn-action-pill btn-action-winbox" title="Conectar no Winbox (1 clique)">⚡ Winbox</button>
-            <button onclick="abrirModalBackups(${r.id})" class="btn-action-pill btn-action-backups" title="Ver Backups Periódicos (15 dias / retenção de 4)">💾 Backups</button>
-            <button onclick="copiarScriptBootstrap(${r.id}, this)" class="btn-action-pill btn-action-ativacao" title="Copiar Script de Ativação Universal">📋 Ativação</button>
-            <button onclick="abrirModalFailover(${r.id})" class="btn-action-pill btn-action-failover" title="Ver ou Copiar Script de Failover Multi-Link (v6 / v7)">🛡️ Failover</button>
-            <button onclick="abrirModalOTA(${r.id})" class="btn-action-pill btn-action-ota" title="Gestão Remota e Comandos OTA">🔄 OTA</button>
-            <button onclick="editarRouter(${r.id}, ${r.client_id}, '${cleanRouterName}', '${cleanRouterModel}', ${r.has_sdwan !== 0 ? 1 : 0})" class="btn-action-pill btn-action-edit" title="Editar Roteador">✏️ Editar</button>
-            <button onclick="excluirRouter(${r.id})" class="btn-action-pill btn-action-delete" title="Excluir Roteador">🗑️ Excluir</button>
-            <button onclick="toggleRouterActions(${r.id}, event)" class="btn-action-pill btn-action-close" title="Recolher ações">
-              <span>▴ Fechar</span>
+          <!-- Botão Gatilho Dropdown com Setinha -->
+          <button onclick="toggleRouterDropdown(${r.id}, event)" class="btn-action-trigger" id="btn-trigger-${r.id}" title="Mais ações para esta RB">
+            <span>Ações</span> <span class="chevron-icon">▾</span>
+          </button>
+
+          <!-- Menu Suspenso Flutuante (Floating Popover - Não altera a tabela) -->
+          <div class="router-dropdown-menu" id="dropdown-menu-${r.id}">
+            <button class="router-dropdown-item" onclick="fecharDropdownsRouters(); abrirModalWinbox(${r.id});">
+              <span class="item-icon">⚡</span> <span>Conectar via Winbox</span>
+            </button>
+            <button class="router-dropdown-item" onclick="fecharDropdownsRouters(); abrirModalBackups(${r.id});">
+              <span class="item-icon">💾</span> <span>Backups Periódicos (.rsc)</span>
+            </button>
+            <button class="router-dropdown-item" onclick="fecharDropdownsRouters(); copiarScriptBootstrap(${r.id}, this);">
+              <span class="item-icon">📋</span> <span>Copiar Script de Ativação</span>
+            </button>
+            <button class="router-dropdown-item" onclick="fecharDropdownsRouters(); abrirModalFailover(${r.id});">
+              <span class="item-icon">🛡️</span> <span>Script Failover Multi-Link</span>
+            </button>
+            <button class="router-dropdown-item" onclick="fecharDropdownsRouters(); abrirModalOTA(${r.id});">
+              <span class="item-icon">🔄</span> <span>Gestão Remota & OTA</span>
+            </button>
+            <div class="router-dropdown-divider"></div>
+            <button class="router-dropdown-item" onclick="fecharDropdownsRouters(); editarRouter(${r.id}, ${r.client_id}, '${cleanRouterName}', '${cleanRouterModel}', ${r.has_sdwan !== 0 ? 1 : 0});">
+              <span class="item-icon">✏️</span> <span>Editar Roteador</span>
+            </button>
+            <button class="router-dropdown-item danger" onclick="fecharDropdownsRouters(); excluirRouter(${r.id});">
+              <span class="item-icon">🗑️</span> <span>Excluir Roteador</span>
             </button>
           </div>
         </div>
@@ -870,56 +882,60 @@ async function carregarAdminRouters() {
 
 
 // -----------------------------------------------------------------------
-// AÇÕES DO ROTEADOR: CONTROLE EXPANDIR / RECOLHER (UI/UX)
-// -----------------------------------------------------------------------
-let currentOpenActionRouterId = null;
 
-function toggleRouterActions(routerId, event) {
+// -----------------------------------------------------------------------
+// AÇÕES DO ROTEADOR: CONTROLE DE MENU DROPDOWN FLUTUANTE (UI/UX)
+// -----------------------------------------------------------------------
+let currentOpenDropdownId = null;
+
+function toggleRouterDropdown(routerId, event) {
   if (event) {
     event.stopPropagation();
     event.preventDefault();
   }
 
-  const colEl = document.getElementById(`actions-col-${routerId}`);
-  const expEl = document.getElementById(`actions-exp-${routerId}`);
-  const btnToggle = document.getElementById(`btn-toggle-${routerId}`);
+  const menu = document.getElementById(`dropdown-menu-${routerId}`);
+  const trigger = document.getElementById(`btn-trigger-${routerId}`);
 
-  if (!colEl || !expEl) return;
+  if (!menu) return;
 
-  const isCurrentlyOpen = expEl.classList.contains('open');
+  const isOpen = menu.classList.contains('open');
 
-  // Fecha qualquer outro que esteja aberto
-  fecharTodasAcoesRouters();
+  // Fecha todos os dropdowns abertos
+  fecharDropdownsRouters();
 
-  if (!isCurrentlyOpen) {
-    colEl.style.display = 'none';
-    expEl.classList.add('open');
-    if (btnToggle) btnToggle.classList.add('active');
-    currentOpenActionRouterId = routerId;
+  if (!isOpen) {
+    menu.classList.add('open');
+    if (trigger) trigger.classList.add('active');
+    currentOpenDropdownId = routerId;
   }
 }
 
-function fecharTodasAcoesRouters() {
-  document.querySelectorAll('.router-actions-expanded.open').forEach(el => {
+function fecharDropdownsRouters() {
+  document.querySelectorAll('.router-dropdown-menu.open').forEach(el => {
     el.classList.remove('open');
   });
-  document.querySelectorAll('.router-actions-collapsed').forEach(el => {
-    el.style.display = 'inline-flex';
-  });
-  document.querySelectorAll('.btn-action-toggle.active').forEach(el => {
+  document.querySelectorAll('.btn-action-trigger.active').forEach(el => {
     el.classList.remove('active');
   });
-  currentOpenActionRouterId = null;
+  currentOpenDropdownId = null;
 }
 
-// Fechar ações automaticamente ao clicar fora
-if (typeof window !== 'undefined' && !window.__routerActionsListenerAttached) {
+// Fechar dropdown automaticamente ao clicar fora ou ao pressionar ESC
+if (typeof window !== 'undefined' && !window.__routerDropdownListenerAttached) {
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.router-actions-wrap')) {
-      fecharTodasAcoesRouters();
+      fecharDropdownsRouters();
     }
   });
-  window.__routerActionsListenerAttached = true;
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      fecharDropdownsRouters();
+    }
+  });
+
+  window.__routerDropdownListenerAttached = true;
 }
 
 async function abrirModalRouter() {
