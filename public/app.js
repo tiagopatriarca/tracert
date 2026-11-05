@@ -817,15 +817,16 @@ async function carregarAdminRouters() {
     const hasDns = r.cloud_dns_name && r.cloud_dns_name !== 'N/A' && r.cloud_dns_name !== '';
     const hasIp = r.cloud_public_ip && r.cloud_public_ip !== 'N/A' && r.cloud_public_ip !== '';
     let cloudCellHtml = '';
-    if (hasDns) {
-      cloudCellHtml = `<div style="font-weight:700; color:#0284c7; cursor:pointer;" onclick="abrirModalWinbox(${r.id})" title="Clique para conectar via Winbox">⚡ ${escapeHtml(r.cloud_dns_name)}</div>`;
-      if (hasIp) {
-        cloudCellHtml += `<div style="font-size:11px; color:#16a34a; font-family:monospace;">IP: ${escapeHtml(r.cloud_public_ip)}</div>`;
-      }
-    } else if (hasIp) {
-      cloudCellHtml = `<div style="font-weight:700; color:#0f172a; cursor:pointer;" onclick="abrirModalWinbox(${r.id})" title="Clique para conectar via Winbox">⚡ IP: ${escapeHtml(r.cloud_public_ip)}</div>`;
+    const cloudTooltip = (r.cloud_dns_name && r.cloud_dns_name !== 'N/A' ? r.cloud_dns_name : '') + (r.cloud_public_ip && r.cloud_public_ip !== 'N/A' ? ' (' + r.cloud_public_ip + ')' : '');
+    if (hasDns || hasIp) {
+      cloudCellHtml = `<span style="display:inline-flex; align-items:center; gap:5px; color:#166534; font-weight:600; font-size:12px; background:#dcfce7; padding:3px 9px; border-radius:12px; cursor:pointer;" onclick="abrirModalWinbox(${r.id})" title="${escapeHtml(cloudTooltip)} - Clique para abrir no Winbox">
+        <span>✅</span> <span>Ativo</span>
+      </span>`;
     } else {
-      cloudCellHtml = `<span style="color:#94a3b8; font-size:11.5px;">Cloud Inativo <button onclick="ativarCloudOTA(${r.id})" style="border:none; background:none; color:#0284c7; cursor:pointer; font-size:11px; text-decoration:underline;">(Ativar)</button></span>`;
+      cloudCellHtml = `<span style="display:inline-flex; align-items:center; gap:5px; color:#64748b; font-size:12px; background:#f1f5f9; padding:3px 8px; border-radius:12px;">
+        <span>⚪</span> <span>Inativo</span>
+        <button onclick="ativarCloudOTA(${r.id})" style="border:none; background:none; color:#0284c7; cursor:pointer; font-size:11.5px; text-decoration:underline; padding:0; margin-left:4px;">(Ativar)</button>
+      </span>`;
     }
     const cleanRouterModel = (r.model || '').replace(/'/g, "\\'");
     tr.innerHTML = `
@@ -838,11 +839,6 @@ async function carregarAdminRouters() {
       <td style="padding: 10px;"><code style="background: #f1f5f9; padding: 4px 6px; border-radius: 4px; font-weight: bold; color: #0284c7;">${escapeHtml(r.token)}</code></td>
       <td class="router-actions-cell" style="padding: 10px;">
         <div class="router-actions-wrap" id="actions-wrap-${r.id}">
-          <!-- Botão Rápido Winbox -->
-          <button onclick="abrirModalWinbox(${r.id})" class="btn-action-winbox-pill" title="Conectar no Winbox (1 clique)">
-            ⚡ Winbox
-          </button>
-
           <!-- Botão Gatilho Dropdown com Setinha -->
           <button onclick="toggleRouterDropdown(${r.id}, event)" class="btn-action-trigger" id="btn-trigger-${r.id}" title="Mais ações para esta RB">
             <span>Ações</span> <span class="chevron-icon">▾</span>
