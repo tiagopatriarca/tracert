@@ -1604,11 +1604,387 @@ function aplicarTemplateMassa(template) {
 :log info message="[TRACERT+] Todos os scripts foram atualizados com sucesso via OTA!";`;
   } else if (template === 'failover_v7' || template === 'failover') {
     if (nameInput) nameInput.value = 'Configuração Failover Multi-Link (RouterOS v7)';
-    textarea.value = "# =======================================================================\n# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL - ROUTEROS v7)\n# Compatibilidade: RouterOS v7.1 até v7.16+\n# Padrao: Rotas /ip route com comentario \"LINK - OPERADORA\"\n# =======================================================================\n\n# 1. Limpeza segura de regras anteriores (RouterOS v7)\n:do { /system script remove [find name=\"tracert_link_monitor\"] } on-error={}\n:do { /system scheduler remove [find name=\"executa_tracert_link_monitor\"] } on-error={}\n:foreach r in=[/ip route find comment~\"!==\"] do={ :do { /ip route remove $r } on-error={} }\n:do { :foreach r in=[/routing rule find comment~\"!==\"] do={ :do { /routing rule remove $r } on-error={} } } on-error={}\n:do { :foreach t in=[/routing table find name~\"rota-de-teste\"] do={ :do { /routing table remove $t } on-error={} } } on-error={}\n:do { /system script remove [find name=\"failover\"] } on-error={}\n:do { /system script remove [find name=\"FAILOVER_ACTIONS\"] } on-error={}\n:do { /system scheduler remove [find name=\"executa script failover\"] } on-error={}\n\n# 2. Setup dinamico de tabelas FIB e rotas de teste (RouterOS v7)\n:foreach i in=[/ip route find dst-address=0.0.0.0/0] do={\n    :local cmt [/ip route get $i comment]\n    :if ([:len $cmt] > 0 and ($cmt ~ \"[Ll][Ii][Nn][Kk]\") and !($cmt ~ \"!==\")) do={\n        :local gw [/ip route get $i gateway]\n        :local cleanName $cmt\n        :local hashPos [:find $cmt \"#\"]\n        :if ([:typeof $hashPos] = \"num\") do={ :set cleanName [:pick $cmt 0 $hashPos] }\n\n        :local safeCmt \"\"\n        :for idx from=0 to=([:len $cleanName] - 1) do={\n            :local char [:pick $cleanName $idx ($idx + 1)]\n            :if ($char = \" \" or $char = \"/\" or $char = \":\" or $char = \"_\") do={ :set char \"-\" }\n            :set safeCmt ($safeCmt . $char)\n        }\n\n        :local tabName (\"rota-de-teste-para-\" . $safeCmt)\n        :do { /routing table add name=$tabName fib } on-error={}\n        :do { /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-table=$tabName comment=(\"!== Rota de teste para \" . $cleanName) } on-error={}\n        :do { /routing rule add action=lookup-only-in-table routing-mark=$tabName table=$tabName comment=(\"!== Force teste para o failover ==> \" . $cleanName) } on-error={}\n    }\n}\n\n# 3. Script de monitoramento de Failover (RouterOS v7)\n/system script add dont-require-permissions=no name=\"failover\" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={\n    :local IPsParaTeste [:toarray \"8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8\"]\n    :local NumeroDePings 2\n    :local Intervalo 00:00:00.5\n    :local ScoreMinimoUP 3\n\n    :global foRouterName [/system identity get name]\n    :global foLinkName\n    :global foLinkStatus\n    :global foPingScore\n    :global comentario\n    :global LinkStatus\n    :global LinkState\n\n    :local totalRotasAtivas 0\n    :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={\n        :local cmt [/ip route get $i comment]\n        :if ([:len $cmt] > 0 and ($cmt ~ \"[Ll][Ii][Nn][Kk]\") and !($cmt ~ \"!==\")) do={ :set totalRotasAtivas ($totalRotasAtivas + 1) }\n    }\n\n    :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={\n        :local cmt [/ip route get $i comment]\n        :if ([:len $cmt] > 0 and ($cmt ~ \"[Ll][Ii][Nn][Kk]\") and !($cmt ~ \"!==\")) do={\n            :delay 1\n            :local cleanName $cmt\n            :local hashPos [:find $cmt \"#\"]\n            :if ([:typeof $hashPos] = \"num\") do={ :set cleanName [:pick $cmt 0 $hashPos] }\n\n            :local safeCmt \"\"\n            :for idx from=0 to=([:len $cleanName] - 1) do={\n                :local char [:pick $cleanName $idx ($idx + 1)]\n                :if ($char = \" \" or $char = \"/\" or $char = \":\" or $char = \"_\") do={ :set char \"-\" }\n                :set safeCmt ($safeCmt . $char)\n            }\n            :local TabRoteAtual (\"rota-de-teste-para-\" . $safeCmt)\n            :local scoreAtual 0\n            :local rGw [/ip route get $i gateway]\n            :local ifaceName $rGw\n\n            :do {\n                :local immGw [/ip route get $i immediate-gw]\n                :local pctPos [:find $immGw \"%\"]\n                :if ([:typeof $pctPos] = \"num\") do={ :set ifaceName [:pick $immGw ($pctPos + 1) [:len $immGw]] }\n            } on-error={}\n\n            :foreach ip in=$IPsParaTeste do={\n                :local res 0\n                :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual] } on-error={\n                    :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName] } on-error={ :set res 0 }\n                }\n                :set scoreAtual ($scoreAtual + $res)\n            }\n\n            :local isDis [/ip route get $i disabled]\n            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={\n                :if ($totalRotasAtivas > 1) do={\n                    /ip route set $i disabled=yes\n                    :set totalRotasAtivas ($totalRotasAtivas - 1)\n                    :set foLinkName $cleanName\n                    :set foLinkStatus \"DOWN\"\n                    :set foPingScore $scoreAtual\n                    :set comentario $cleanName\n                    :set LinkStatus \"DOWN\"\n                    :set LinkState 0\n                    :do { /system script run FAILOVER_ACTIONS } on-error={}\n                } else={\n                    /log warning message=(\"[FAILOVER v7] Link \" . $cleanName . \" falhou (Score \" . [:tostr $scoreAtual] . \"/8), mantido ativo por ser o unico restante!\")\n                    :set foLinkName $cleanName\n                    :set foLinkStatus \"DOWN\"\n                    :set foPingScore $scoreAtual\n                    :set comentario $cleanName\n                    :set LinkStatus \"DOWN\"\n                    :set LinkState 0\n                    :do { /system script run FAILOVER_ACTIONS } on-error={}\n                }\n            }\n            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={\n                /ip route set $i disabled=no\n                :set totalRotasAtivas ($totalRotasAtivas + 1)\n                :set foLinkName $cleanName\n                :set foLinkStatus \"UP\"\n                :set foPingScore $scoreAtual\n                :set comentario $cleanName\n                :set LinkStatus \"UP\"\n                :set LinkState 1\n                :do { /system script run FAILOVER_ACTIONS } on-error={}\n            }\n        }\n    }\n}\n\n# 4. Agendador (a cada 30 segundos)\n/system scheduler remove [find name=\"executa script failover\"]\n/system scheduler add interval=30s name=\"executa script failover\" on-event=\"failover\" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup\n:do { /system script run failover } on-error={}\n:log info message=\"[TRACERT+] Failover Multi-Link (RouterOS v7) provisionado com sucesso!\";";
+    textarea.value = `# =======================================================================
+# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL - ROUTEROS v7)
+# Compatibilidade: RouterOS v7.1 até v7.16+
+# Padrao: Rotas /ip route com comentario "LINK - OPERADORA"
+# =======================================================================
+
+# 1. Limpeza segura de regras anteriores (RouterOS v7)
+:do { /system script remove [find name="tracert_link_monitor"] } on-error={}
+:do { /system scheduler remove [find name="executa_tracert_link_monitor"] } on-error={}
+:foreach r in=[/ip route find comment~"!== "] do={ :do { /ip route remove $r } on-error={} }
+:do { :foreach r in=[/routing rule find comment~"!== "] do={ :do { /routing rule remove $r } on-error={} } } on-error={}
+:do { :foreach t in=[/routing table find name~"rota-de-teste"] do={ :do { /routing table remove $t } on-error={} } } on-error={}
+:do { /system script remove [find name="failover"] } on-error={}
+:do { /system script remove [find name="FAILOVER_ACTIONS"] } on-error={}
+:do { /system scheduler remove [find name="executa script failover"] } on-error={}
+
+# 2. Configura a acao FAILOVER_ACTIONS conectada ao TRACERT+
+/system script add dont-require-permissions=no name="FAILOVER_ACTIONS" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :global foLinkName
+    :global comentario
+    :local linkFinal $foLinkName
+    :if ([:len $linkFinal] = 0) do={ :set linkFinal $comentario }
+    :local hashPos [:find $linkFinal "#"]
+    :if ([:typeof $hashPos] = "num") do={
+        :set linkFinal [:pick $linkFinal 0 $hashPos]
+    }
+
+    :global foLinkStatus
+    :global LinkStatus
+    :global LinkState
+    :local statusFinal $foLinkStatus
+    :if ([:len $statusFinal] = 0) do={ :set statusFinal $LinkStatus }
+    :if ([:len $statusFinal] = 0) do={
+        :if ($LinkState > 0) do={ :set statusFinal "UP" } else={ :set statusFinal "DOWN" }
+    }
+
+    :global foPingScore
+    :local scoreFinal $foPingScore
+    :if ([:typeof $scoreFinal] != "num") do={
+        :if ($statusFinal = "UP") do={ :set scoreFinal 8 } else={ :set scoreFinal 0 }
+    }
+
+    :local routerName [/system identity get name]
+    /log warning message=("[FAILOVER v7] Link: " . $linkFinal . " alterado para: " . $statusFinal . " (Score: " . [:tostr $scoreFinal] . "/8)")
+
+    :local apiBaseUrl "https://tracert.tiplus.inf.br/api/telemetry/failover"
+    :local routerToken "{{ROUTER_TOKEN}}"
+    :local payload ("token=" . $routerToken . "&link=" . $linkFinal . "&status=" . $statusFinal . "&score=" . [:tostr $scoreFinal])
+
+    :do {
+        /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url=($apiBaseUrl . "/" . $routerToken) http-data=$payload keep-result=no
+    } on-error={
+        :do {
+            /tool fetch http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url=($apiBaseUrl . "/" . $routerToken) http-data=$payload keep-result=no
+        } on-error={
+            /log error message=("[FAILOVER v7] Falha ao enviar telemetria para o TRACERT+ para " . $linkFinal)
+        }
+    }
+}
+
+# 3. Setup dinamico de tabelas FIB e rotas de teste (RouterOS v7)
+:foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
+    :local cmt [/ip route get $i comment]
+    :local rTab "main"
+    :do { :set rTab [/ip route get $i routing-table] } on-error={}
+    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!== ") and ($rTab = "main" or [:len $rTab] = 0)) do={
+        :local gw [/ip route get $i gateway]
+        :local cleanName $cmt
+        :local hashPos [:find $cmt "#"]
+        :if ([:typeof $hashPos] = "num") do={ :set cleanName [:pick $cmt 0 $hashPos] }
+
+        :local safeCmt ""
+        :for idx from=0 to=([:len $cleanName] - 1) do={
+            :local char [:pick $cleanName $idx ($idx + 1)]
+            :if ($char = " " or $char = "/" or $char = ":" or $char = "_") do={ :set char "-" }
+            :set safeCmt ($safeCmt . $char)
+        }
+
+        :local tabName ("rota-de-teste-para-" . $safeCmt)
+        :do { /routing table add name=$tabName fib } on-error={}
+        :do { /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-table=$tabName comment=("!== Rota de teste para " . $cleanName) } on-error={}
+        :do { /routing rule add action=lookup-only-in-table routing-mark=$tabName table=$tabName comment=("!== Force teste para o failover ==> " . $cleanName) } on-error={}
+
+        :local isDis [/ip route get $i disabled]
+        :local initStatus "UP"
+        :local initScore 8
+        :if ($isDis = true) do={ :set initStatus "DOWN"; :set initScore 0 }
+        :local payload ("token={{ROUTER_TOKEN}}&link=" . $cleanName . "&status=" . $initStatus . "&score=" . [:tostr $initScore])
+        :do {
+            /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url=("https://tracert.tiplus.inf.br/api/telemetry/failover/{{ROUTER_TOKEN}}") http-data=$payload keep-result=no
+        } on-error={}
+    }
+}
+
+# 4. Script de monitoramento de Failover (RouterOS v7)
+/system script add dont-require-permissions=no name="failover" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local IPsParaTeste [:toarray "8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8"]
+    :local NumeroDePings 2
+    :local Intervalo 00:00:00.5
+    :local ScoreMinimoUP 3
+
+    :global foRouterName [/system identity get name]
+    :global foLinkName
+    :global foLinkStatus
+    :global foPingScore
+    :global comentario
+    :global LinkStatus
+    :global LinkState
+
+    :local totalRotasAtivas 0
+    :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
+        :local cmt [/ip route get $i comment]
+        :local rTab "main"
+        :do { :set rTab [/ip route get $i routing-table] } on-error={}
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!== ") and ($rTab = "main" or [:len $rTab] = 0)) do={ :set totalRotasAtivas ($totalRotasAtivas + 1) }
+    }
+
+    :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
+        :local cmt [/ip route get $i comment]
+        :local rTab "main"
+        :do { :set rTab [/ip route get $i routing-table] } on-error={}
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!== ") and ($rTab = "main" or [:len $rTab] = 0)) do={
+            :delay 1
+            :local cleanName $cmt
+            :local hashPos [:find $cmt "#"]
+            :if ([:typeof $hashPos] = "num") do={ :set cleanName [:pick $cmt 0 $hashPos] }
+
+            :local safeCmt ""
+            :for idx from=0 to=([:len $cleanName] - 1) do={
+                :local char [:pick $cleanName $idx ($idx + 1)]
+                :if ($char = " " or $char = "/" or $char = ":" or $char = "_") do={ :set char "-" }
+                :set safeCmt ($safeCmt . $char)
+            }
+            :local TabRoteAtual ("rota-de-teste-para-" . $safeCmt)
+            :local scoreAtual 0
+            :local rGw [/ip route get $i gateway]
+            :local ifaceName $rGw
+
+            :do {
+                :local immGw [/ip route get $i immediate-gw]
+                :local pctPos [:find $immGw "%"]
+                :if ([:typeof $pctPos] = "num") do={ :set ifaceName [:pick $immGw ($pctPos + 1) [:len $immGw]] }
+            } on-error={}
+
+            :foreach ip in=$IPsParaTeste do={
+                :local res 0
+                :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual] } on-error={
+                    :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName] } on-error={ :set res 0 }
+                }
+                :set scoreAtual ($scoreAtual + $res)
+            }
+
+            :local isDis [/ip route get $i disabled]
+            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={
+                :if ($totalRotasAtivas > 1) do={
+                    /ip route set $i disabled=yes
+                    :set totalRotasAtivas ($totalRotasAtivas - 1)
+                    :set foLinkName $cleanName
+                    :set foLinkStatus "DOWN"
+                    :set foPingScore $scoreAtual
+                    :set comentario $cleanName
+                    :set LinkStatus "DOWN"
+                    :set LinkState 0
+                    :do { /system script run FAILOVER_ACTIONS } on-error={}
+                } else={
+                    /log warning message=("[FAILOVER v7] Link " . $cleanName . " falhou (Score " . [:tostr $scoreAtual] . "/8), mantido ativo por ser o unico restante!")
+                    :set foLinkName $cleanName
+                    :set foLinkStatus "DOWN"
+                    :set foPingScore $scoreAtual
+                    :set comentario $cleanName
+                    :set LinkStatus "DOWN"
+                    :set LinkState 0
+                    :do { /system script run FAILOVER_ACTIONS } on-error={}
+                }
+            }
+            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={
+                /ip route set $i disabled=no
+                :set totalRotasAtivas ($totalRotasAtivas + 1)
+                :set foLinkName $cleanName
+                :set foLinkStatus "UP"
+                :set foPingScore $scoreAtual
+                :set comentario $cleanName
+                :set LinkStatus "UP"
+                :set LinkState 1
+                :do { /system script run FAILOVER_ACTIONS } on-error={}
+            }
+        }
+    }
+}
+
+# 5. Agendador (a cada 30 segundos)
+/system scheduler remove [find name="executa script failover"]
+/system scheduler add interval=30s name="executa script failover" on-event="failover" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+:do { /system script run failover } on-error={}
+:log info message="[TRACERT+] Failover Multi-Link (RouterOS v7) provisionado com sucesso!";`;
   } else if (template === 'failover_v6') {
     if (nameInput) nameInput.value = 'Configuração Failover Multi-Link (RouterOS v6)';
-    textarea.value = "# =======================================================================\n# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL - ROUTEROS v6)\n# Compatibilidade: RouterOS v6.45 até v6.49+\n# Padrao: Rotas /ip route com comentario \"LINK - OPERADORA\"\n# =======================================================================\n\n# 1. Limpeza segura de regras anteriores (RouterOS v6)\n:do { /system script remove [find name=\"tracert_link_monitor\"] } on-error={}\n:do { /system scheduler remove [find name=\"executa_tracert_link_monitor\"] } on-error={}\n:foreach r in=[/ip route find comment~\"!==\"] do={ :do { /ip route remove $r } on-error={} }\n:do { :foreach r in=[/ip route rule find comment~\"!==\"] do={ :do { /ip route rule remove $r } on-error={} } } on-error={}\n:do { /system script remove [find name=\"failover\"] } on-error={}\n:do { /system script remove [find name=\"FAILOVER_ACTIONS\"] } on-error={}\n:do { /system scheduler remove [find name=\"executa script failover\"] } on-error={}\n\n# 2. Setup dinamico de rotas de teste e regras (RouterOS v6)\n:foreach i in=[/ip route find dst-address=0.0.0.0/0] do={\n    :local cmt [/ip route get $i comment]\n    :if ([:len $cmt] > 0 and ($cmt ~ \"[Ll][Ii][Nn][Kk]\") and !($cmt ~ \"!==\")) do={\n        :local gw [/ip route get $i gateway]\n        :local cleanName $cmt\n        :local hashPos [:find $cmt \"#\"]\n        :if ([:typeof $hashPos] = \"num\") do={ :set cleanName [:pick $cmt 0 $hashPos] }\n\n        :local safeCmt \"\"\n        :for idx from=0 to=([:len $cleanName] - 1) do={\n            :local char [:pick $cleanName $idx ($idx + 1)]\n            :if ($char = \" \" or $char = \"/\" or $char = \":\" or $char = \"_\") do={ :set char \"-\" }\n            :set safeCmt ($safeCmt . $char)\n        }\n\n        :local tabName (\"rota-de-teste-para-\" . $safeCmt)\n        :do { /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-mark=$tabName comment=(\"!== Rota de teste para \" . $cleanName) } on-error={}\n        :do { /ip route rule add routing-mark=$tabName action=lookup-only-in-table table=$tabName comment=(\"!== Force teste para o failover ==> \" . $cleanName) } on-error={}\n    }\n}\n\n# 3. Script de monitoramento de Failover (RouterOS v6)\n/system script add dont-require-permissions=no name=\"failover\" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={\n    :local IPsParaTeste [:toarray \"8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8\"]\n    :local NumeroDePings 2\n    :local Intervalo 00:00:00.5\n    :local ScoreMinimoUP 3\n\n    :global foRouterName [/system identity get name]\n    :global foLinkName\n    :global foLinkStatus\n    :global foPingScore\n    :global comentario\n    :global LinkStatus\n    :global LinkState\n\n    :local totalRotasAtivas 0\n    :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={\n        :local cmt [/ip route get $i comment]\n        :if ([:len $cmt] > 0 and ($cmt ~ \"[Ll][Ii][Nn][Kk]\") and !($cmt ~ \"!==\")) do={ :set totalRotasAtivas ($totalRotasAtivas + 1) }\n    }\n\n    :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={\n        :local cmt [/ip route get $i comment]\n        :if ([:len $cmt] > 0 and ($cmt ~ \"[Ll][Ii][Nn][Kk]\") and !($cmt ~ \"!==\")) do={\n            :delay 1\n            :local cleanName $cmt\n            :local hashPos [:find $cmt \"#\"]\n            :if ([:typeof $hashPos] = \"num\") do={ :set cleanName [:pick $cmt 0 $hashPos] }\n\n            :local safeCmt \"\"\n            :for idx from=0 to=([:len $cleanName] - 1) do={\n                :local char [:pick $cleanName $idx ($idx + 1)]\n                :if ($char = \" \" or $char = \"/\" or $char = \":\" or $char = \"_\") do={ :set char \"-\" }\n                :set safeCmt ($safeCmt . $char)\n            }\n            :local TabRoteAtual (\"rota-de-teste-para-\" . $safeCmt)\n            :local scoreAtual 0\n            :local rGw [/ip route get $i gateway]\n\n            :foreach ip in=$IPsParaTeste do={\n                :local res 0\n                :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual] } on-error={\n                    :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$rGw] } on-error={ :set res 0 }\n                }\n                :set scoreAtual ($scoreAtual + $res)\n            }\n\n            :local isDis [/ip route get $i disabled]\n            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={\n                :if ($totalRotasAtivas > 1) do={\n                    /ip route set $i disabled=yes\n                    :set totalRotasAtivas ($totalRotasAtivas - 1)\n                    :set foLinkName $cleanName\n                    :set foLinkStatus \"DOWN\"\n                    :set foPingScore $scoreAtual\n                    :set comentario $cleanName\n                    :set LinkStatus \"DOWN\"\n                    :set LinkState 0\n                    :do { /system script run FAILOVER_ACTIONS } on-error={}\n                } else={\n                    /log warning message=(\"[FAILOVER v6] Link \" . $cleanName . \" falhou (Score \" . [:tostr $scoreAtual] . \"/8), mantido ativo por ser o unico restante!\")\n                    :set foLinkName $cleanName\n                    :set foLinkStatus \"DOWN\"\n                    :set foPingScore $scoreAtual\n                    :set comentario $cleanName\n                    :set LinkStatus \"DOWN\"\n                    :set LinkState 0\n                    :do { /system script run FAILOVER_ACTIONS } on-error={}\n                }\n            }\n            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={\n                /ip route set $i disabled=no\n                :set totalRotasAtivas ($totalRotasAtivas + 1)\n                :set foLinkName $cleanName\n                :set foLinkStatus \"UP\"\n                :set foPingScore $scoreAtual\n                :set comentario $cleanName\n                :set LinkStatus \"UP\"\n                :set LinkState 1\n                :do { /system script run FAILOVER_ACTIONS } on-error={}\n            }\n        }\n    }\n}\n\n# 4. Agendador (a cada 30 segundos)\n/system scheduler remove [find name=\"executa script failover\"]\n/system scheduler add interval=30s name=\"executa script failover\" on-event=\"failover\" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup\n:do { /system script run failover } on-error={}\n:log info message=\"[TRACERT+] Failover Multi-Link (RouterOS v6) provisionado com sucesso!\";";
-    } else if (template === 'ntp') {
+    textarea.value = `# =======================================================================
+# SCRIPT: FAILOVER_SETUP_AND_MONITOR (TRACERT+ OFICIAL - ROUTEROS v6)
+# Compatibilidade: RouterOS v6.45 até v6.49+
+# Padrao: Rotas /ip route com comentario "LINK - OPERADORA"
+# =======================================================================
+
+# 1. Limpeza segura de regras anteriores (RouterOS v6)
+:do { /system script remove [find name="tracert_link_monitor"] } on-error={}
+:do { /system scheduler remove [find name="executa_tracert_link_monitor"] } on-error={}
+:foreach r in=[/ip route find comment~"!== "] do={ :do { /ip route remove $r } on-error={} }
+:do { :foreach r in=[/ip route rule find comment~"!== "] do={ :do { /ip route rule remove $r } on-error={} } } on-error={}
+:do { /system script remove [find name="failover"] } on-error={}
+:do { /system script remove [find name="FAILOVER_ACTIONS"] } on-error={}
+:do { /system scheduler remove [find name="executa script failover"] } on-error={}
+
+# 2. Configura a acao FAILOVER_ACTIONS conectada ao TRACERT+
+/system script add dont-require-permissions=no name="FAILOVER_ACTIONS" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :global foLinkName
+    :global comentario
+    :local linkFinal $foLinkName
+    :if ([:len $linkFinal] = 0) do={ :set linkFinal $comentario }
+    :local hashPos [:find $linkFinal "#"]
+    :if ([:typeof $hashPos] = "num") do={
+        :set linkFinal [:pick $linkFinal 0 $hashPos]
+    }
+
+    :global foLinkStatus
+    :global LinkStatus
+    :global LinkState
+    :local statusFinal $foLinkStatus
+    :if ([:len $statusFinal] = 0) do={ :set statusFinal $LinkStatus }
+    :if ([:len $statusFinal] = 0) do={
+        :if ($LinkState > 0) do={ :set statusFinal "UP" } else={ :set statusFinal "DOWN" }
+    }
+
+    :global foPingScore
+    :local scoreFinal $foPingScore
+    :if ([:typeof $scoreFinal] != "num") do={
+        :if ($statusFinal = "UP") do={ :set scoreFinal 8 } else={ :set scoreFinal 0 }
+    }
+
+    :local routerName [/system identity get name]
+    /log warning message=("[FAILOVER v6] Link: " . $linkFinal . " alterado para: " . $statusFinal . " (Score: " . [:tostr $scoreFinal] . "/8)")
+
+    :local apiBaseUrl "https://tracert.tiplus.inf.br/api/telemetry/failover"
+    :local routerToken "{{ROUTER_TOKEN}}"
+    :local payload ("token=" . $routerToken . "&link=" . $linkFinal . "&status=" . $statusFinal . "&score=" . [:tostr $scoreFinal])
+
+    :do {
+        /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url=($apiBaseUrl . "/" . $routerToken) http-data=$payload keep-result=no
+    } on-error={
+        :do {
+            /tool fetch http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url=($apiBaseUrl . "/" . $routerToken) http-data=$payload keep-result=no
+        } on-error={
+            /log error message=("[FAILOVER v6] Falha ao enviar telemetria para o TRACERT+ para " . $linkFinal)
+        }
+    }
+}
+
+# 3. Setup dinamico de rotas de teste e regras (RouterOS v6)
+:foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
+    :local cmt [/ip route get $i comment]
+    :local rMark [/ip route get $i routing-mark]
+    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!== ") and [:len $rMark] = 0) do={
+        :local gw [/ip route get $i gateway]
+        :local cleanName $cmt
+        :local hashPos [:find $cmt "#"]
+        :if ([:typeof $hashPos] = "num") do={ :set cleanName [:pick $cmt 0 $hashPos] }
+
+        :local safeCmt ""
+        :for idx from=0 to=([:len $cleanName] - 1) do={
+            :local char [:pick $cleanName $idx ($idx + 1)]
+            :if ($char = " " or $char = "/" or $char = ":" or $char = "_") do={ :set char "-" }
+            :set safeCmt ($safeCmt . $char)
+        }
+
+        :local tabName ("rota-de-teste-para-" . $safeCmt)
+        :do { /ip route add dst-address=0.0.0.0/0 gateway=$gw routing-mark=$tabName comment=("!== Rota de teste para " . $cleanName) } on-error={}
+        :do { /ip route rule add routing-mark=$tabName action=lookup-only-in-table table=$tabName comment=("!== Force teste para o failover ==> " . $cleanName) } on-error={}
+
+        :local isDis [/ip route get $i disabled]
+        :local initStatus "UP"
+        :local initScore 8
+        :if ($isDis = true) do={ :set initStatus "DOWN"; :set initScore 0 }
+        :local payload ("token={{ROUTER_TOKEN}}&link=" . $cleanName . "&status=" . $initStatus . "&score=" . [:tostr $initScore])
+        :do {
+            /tool fetch check-certificate=no http-method=post http-header-field="Content-Type: application/x-www-form-urlencoded" url=("https://tracert.tiplus.inf.br/api/telemetry/failover/{{ROUTER_TOKEN}}") http-data=$payload keep-result=no
+        } on-error={}
+    }
+}
+
+# 4. Script de monitoramento de Failover (RouterOS v6)
+/system script add dont-require-permissions=no name="failover" owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source={
+    :local IPsParaTeste [:toarray "8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8"]
+    :local NumeroDePings 2
+    :local Intervalo 00:00:00.5
+    :local ScoreMinimoUP 3
+
+    :global foRouterName [/system identity get name]
+    :global foLinkName
+    :global foLinkStatus
+    :global foPingScore
+    :global comentario
+    :global LinkStatus
+    :global LinkState
+
+    :local totalRotasAtivas 0
+    :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
+        :local cmt [/ip route get $i comment]
+        :local rMark [/ip route get $i routing-mark]
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!== ") and [:len $rMark] = 0) do={ :set totalRotasAtivas ($totalRotasAtivas + 1) }
+    }
+
+    :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
+        :local cmt [/ip route get $i comment]
+        :local rMark [/ip route get $i routing-mark]
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!== ") and [:len $rMark] = 0) do={
+            :delay 1
+            :local cleanName $cmt
+            :local hashPos [:find $cmt "#"]
+            :if ([:typeof $hashPos] = "num") do={ :set cleanName [:pick $cmt 0 $hashPos] }
+
+            :local safeCmt ""
+            :for idx from=0 to=([:len $cleanName] - 1) do={
+                :local char [:pick $cleanName $idx ($idx + 1)]
+                :if ($char = " " or $char = "/" or $char = ":" or $char = "_") do={ :set char "-" }
+                :set safeCmt ($safeCmt . $char)
+            }
+            :local TabRoteAtual ("rota-de-teste-para-" . $safeCmt)
+            :local scoreAtual 0
+            :local rGw [/ip route get $i gateway]
+
+            :foreach ip in=$IPsParaTeste do={
+                :local res 0
+                :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual] } on-error={
+                    :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$rGw] } on-error={ :set res 0 }
+                }
+                :set scoreAtual ($scoreAtual + $res)
+            }
+
+            :local isDis [/ip route get $i disabled]
+            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={
+                :if ($totalRotasAtivas > 1) do={
+                    /ip route set $i disabled=yes
+                    :set totalRotasAtivas ($totalRotasAtivas - 1)
+                    :set foLinkName $cleanName
+                    :set foLinkStatus "DOWN"
+                    :set foPingScore $scoreAtual
+                    :set comentario $cleanName
+                    :set LinkStatus "DOWN"
+                    :set LinkState 0
+                    :do { /system script run FAILOVER_ACTIONS } on-error={}
+                } else={
+                    /log warning message=("[FAILOVER v6] Link " . $cleanName . " falhou (Score " . [:tostr $scoreAtual] . "/8), mantido ativo por ser o unico restante!")
+                    :set foLinkName $cleanName
+                    :set foLinkStatus "DOWN"
+                    :set foPingScore $scoreAtual
+                    :set comentario $cleanName
+                    :set LinkStatus "DOWN"
+                    :set LinkState 0
+                    :do { /system script run FAILOVER_ACTIONS } on-error={}
+                }
+            }
+            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={
+                /ip route set $i disabled=no
+                :set totalRotasAtivas ($totalRotasAtivas + 1)
+                :set foLinkName $cleanName
+                :set foLinkStatus "UP"
+                :set foPingScore $scoreAtual
+                :set comentario $cleanName
+                :set LinkStatus "UP"
+                :set LinkState 1
+                :do { /system script run FAILOVER_ACTIONS } on-error={}
+            }
+        }
+    }
+}
+
+# 5. Agendador (a cada 30 segundos)
+/system scheduler remove [find name="executa script failover"]
+/system scheduler add interval=30s name="executa script failover" on-event="failover" policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
+:do { /system script run failover } on-error={}
+:log info message="[TRACERT+] Failover Multi-Link (RouterOS v6) provisionado com sucesso!";`;
+  } else if (template === 'ntp') {
     if (nameInput) nameInput.value = 'Configuração NTP Brasil (pool.ntp.br)';
     textarea.value = `/system clock set time-zone-name=America/Fortaleza;\n/system ntp client set enabled=yes primary-ntp=200.160.7.186 secondary-ntp=200.189.40.8;\n:log info message="[TRACERT+] NTP e fuso horário configurados com sucesso!";`;
   } else if (template === 'dns') {

@@ -1013,7 +1013,8 @@ function generateFailoverScriptV6(router) {
 # 3. Setup dinamico de rotas de teste e regras (RouterOS v6)
 :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
     :local cmt [/ip route get $i comment]
-    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+    :local rMark [/ip route get $i routing-mark]
+    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==") and [:len $rMark] = 0) do={
         :local gw [/ip route get $i gateway]
         :local cleanName $cmt
         :local hashPos [:find $cmt "#"]
@@ -1070,14 +1071,18 @@ function generateFailoverScriptV6(router) {
     :local totalRotasAtivas 0
     :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
         :local cmt [/ip route get $i comment]
-        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+        :local rTab "main"
+        :do { :set rTab [/ip route get $i routing-table] } on-error={}
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==") and ($rTab = "main" or [:len $rTab] = 0)) do={
             :set totalRotasAtivas ($totalRotasAtivas + 1)
         }
     }
 
     :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
         :local cmt [/ip route get $i comment]
-        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+        :local rTab "main"
+        :do { :set rTab [/ip route get $i routing-table] } on-error={}
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==") and ($rTab = "main" or [:len $rTab] = 0)) do={
             :local cleanName $cmt
             :local hashPos [:find $cmt "#"]
             :if ([:typeof $hashPos] = "num") do={
@@ -1225,7 +1230,9 @@ function generateFailoverScriptV7(router) {
 # 3. Setup dinamico de tabelas FIB e rotas de teste (RouterOS v7)
 :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
     :local cmt [/ip route get $i comment]
-    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+    :local rTab "main"
+    :do { :set rTab [/ip route get $i routing-table] } on-error={}
+    :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==") and ($rTab = "main" or [:len $rTab] = 0)) do={
         :local gw [/ip route get $i gateway]
         :local cleanName $cmt
         :local hashPos [:find $cmt "#"]
@@ -1287,14 +1294,18 @@ function generateFailoverScriptV7(router) {
     :local totalRotasAtivas 0
     :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
         :local cmt [/ip route get $i comment]
-        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+        :local rTab "main"
+        :do { :set rTab [/ip route get $i routing-table] } on-error={}
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==") and ($rTab = "main" or [:len $rTab] = 0)) do={
             :set totalRotasAtivas ($totalRotasAtivas + 1)
         }
     }
 
     :foreach i in=[/ip route find dst-address=0.0.0.0/0] do={
         :local cmt [/ip route get $i comment]
-        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==")) do={
+        :local rTab "main"
+        :do { :set rTab [/ip route get $i routing-table] } on-error={}
+        :if ([:len $cmt] > 0 and ($cmt ~ "[Ll][Ii][Nn][Kk]") and !($cmt ~ "!==") and ($rTab = "main" or [:len $rTab] = 0)) do={
             :local cleanName $cmt
             :local hashPos [:find $cmt "#"]
             :if ([:typeof $hashPos] = "num") do={
