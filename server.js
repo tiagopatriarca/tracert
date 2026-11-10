@@ -212,7 +212,12 @@ app.post(['/api/telemetry/failover', '/api/telemetry/failover/:token'], async (r
   touchRouterSeen(router);
 
   const data = { ...req.query, ...req.body };
-  const linkName = data.link || data.linkName || 'LINK-WAN';
+  const rawLinkName = (data.link || data.linkName || '').trim();
+  if (!rawLinkName || rawLinkName.toUpperCase() === 'LINK-WAN') {
+    console.warn(`[FAILOVER TELEMETRY REJEITADA] Router: ${router.name} (${router.token}) | Link inválido ou vazio: "${rawLinkName}"`);
+    return res.status(400).json({ error: 'Nome do link não informado ou inválido' });
+  }
+  const linkName = rawLinkName;
   const linkStatus = (data.status || 'UP').toUpperCase();
   let pingScore = 0;
   if (data.score !== undefined && data.score !== null && data.score !== '') {
@@ -976,6 +981,10 @@ function generateFailoverScriptV6(router) {
     :if ([:typeof $hashPos] = "num") do={
         :set linkFinal [:pick $linkFinal 0 $hashPos]
     }
+    :if ([:len $linkFinal] = 0 or $linkFinal = "LINK-WAN") do={
+        /log warning message=("[FAILOVER v6] FAILOVER_ACTIONS ignorado: linkFinal vazio ou invalido")
+        :error "linkFinal invalido"
+    }
 
     :global foLinkStatus
     :global LinkStatus
@@ -1193,6 +1202,10 @@ function generateFailoverScriptV7(router) {
     :if ([:typeof $hashPos] = "num") do={
         :set linkFinal [:pick $linkFinal 0 $hashPos]
     }
+    :if ([:len $linkFinal] = 0 or $linkFinal = "LINK-WAN") do={
+        /log warning message=("[FAILOVER v6] FAILOVER_ACTIONS ignorado: linkFinal vazio ou invalido")
+        :error "linkFinal invalido"
+    }
 
     :global foLinkStatus
     :global LinkStatus
@@ -1324,22 +1337,33 @@ function generateFailoverScriptV7(router) {
             :local rGw [/ip route get $i gateway]
             :local ifaceName $rGw
 
-            # No RouterOS v7: extrai interface fisica do gateway dinamico via immediate-gw
-            :do {
-                :local immGw [/ip route get $i immediate-gw]
-                :local pctPos [:find $immGw "%"]
+            # No RouterOS v7: busca a rota de teste permanente (que nunca e desativada) para extrair a interface fisica real
+            :local testRoute [/ip route find comment=("!== Rota de teste para " . $cleanName)]
+            :if ([:len $testRoute] > 0) do={
+                :local immStr [:tostr [/ip route get ($testRoute->0) immediate-gw]]
+                :local pctPos [:find $immStr "%"]
                 :if ([:typeof $pctPos] = "num") do={
-                    :set ifaceName [:pick $immGw ($pctPos + 1) [:len $immGw]]
+                    :set ifaceName [:pick $immStr ($pctPos + 1) [:len $immStr]]
+                } else={
+                    :if ([:len $immStr] > 0) do={ :set ifaceName $immStr }
                 }
-            } on-error={}
+            } else={
+                :do {
+                    :local immStr [:tostr [/ip route get $i immediate-gw]]
+                    :local pctPos [:find $immStr "%"]
+                    :if ([:typeof $pctPos] = "num") do={
+                        :set ifaceName [:pick $immStr ($pctPos + 1) [:len $immStr]]
+                    }
+                } on-error={}
+            }
 
             :foreach ip in=$IPsParaTeste do={
                 :local res 0
                 :do {
-                    :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual]
+                    :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName]
                 } on-error={
                     :do {
-                        :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName]
+                        :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual]
                     } on-error={ :set res 0 }
                 }
                 :set scoreAtual ($scoreAtual + $res)

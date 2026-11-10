@@ -1630,6 +1630,10 @@ function aplicarTemplateMassa(template) {
     :if ([:typeof $hashPos] = "num") do={
         :set linkFinal [:pick $linkFinal 0 $hashPos]
     }
+    :if ([:len $linkFinal] = 0 or $linkFinal = "LINK-WAN") do={
+        /log warning message=("[FAILOVER] Acao ignorada: linkFinal nao definido")
+        :error "linkFinal invalido"
+    }
 
     :global foLinkStatus
     :global LinkStatus
@@ -1742,16 +1746,34 @@ function aplicarTemplateMassa(template) {
             :local rGw [/ip route get $i gateway]
             :local ifaceName $rGw
 
-            :do {
-                :local immGw [/ip route get $i immediate-gw]
-                :local pctPos [:find $immGw "%"]
-                :if ([:typeof $pctPos] = "num") do={ :set ifaceName [:pick $immGw ($pctPos + 1) [:len $immGw]] }
-            } on-error={}
+            # Busca a rota de teste permanente para obter a interface real
+            :local testRoute [/ip route find comment=("!== Rota de teste para " . $cleanName)]
+            :if ([:len $testRoute] > 0) do={
+                :local immStr [:tostr [/ip route get ($testRoute->0) immediate-gw]]
+                :local pctPos [:find $immStr "%"]
+                :if ([:typeof $pctPos] = "num") do={
+                    :set ifaceName [:pick $immStr ($pctPos + 1) [:len $immStr]]
+                } else={
+                    :if ([:len $immStr] > 0) do={ :set ifaceName $immStr }
+                }
+            } else={
+                :do {
+                    :local immStr [:tostr [/ip route get $i immediate-gw]]
+                    :local pctPos [:find $immStr "%"]
+                    :if ([:typeof $pctPos] = "num") do={
+                        :set ifaceName [:pick $immStr ($pctPos + 1) [:len $immStr]]
+                    }
+                } on-error={}
+            }
 
             :foreach ip in=$IPsParaTeste do={
                 :local res 0
-                :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual] } on-error={
-                    :do { :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName] } on-error={ :set res 0 }
+                :do {
+                    :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName]
+                } on-error={
+                    :do {
+                        :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual]
+                    } on-error={ :set res 0 }
                 }
                 :set scoreAtual ($scoreAtual + $res)
             }
@@ -1825,6 +1847,10 @@ function aplicarTemplateMassa(template) {
     :local hashPos [:find $linkFinal "#"]
     :if ([:typeof $hashPos] = "num") do={
         :set linkFinal [:pick $linkFinal 0 $hashPos]
+    }
+    :if ([:len $linkFinal] = 0 or $linkFinal = "LINK-WAN") do={
+        /log warning message=("[FAILOVER] Acao ignorada: linkFinal nao definido")
+        :error "linkFinal invalido"
     }
 
     :global foLinkStatus
