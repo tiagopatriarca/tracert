@@ -1361,11 +1361,7 @@ function generateFailoverScriptV7(router) {
                 :local res 0
                 :do {
                     :set res [/ping $ip count=$NumeroDePings interval=$Intervalo interface=$ifaceName]
-                } on-error={
-                    :do {
-                        :set res [/ping $ip count=$NumeroDePings interval=$Intervalo routing-table=$TabRoteAtual]
-                    } on-error={ :set res 0 }
-                }
+                } on-error={ :set res 0 }
                 :set scoreAtual ($scoreAtual + $res)
             }
 
