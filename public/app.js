@@ -1716,6 +1716,9 @@ function aplicarTemplateMassa(template) {
     :global comentario
     :global LinkStatus
     :global LinkState
+    :global foDownLinks
+    :if ([:typeof $foDownLinks] != "str") do={ :set foDownLinks "," }
+    :local currentDownLinks ","
 
     :local totalRotasAtivas 0
     :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
@@ -1742,6 +1745,9 @@ function aplicarTemplateMassa(template) {
                 :set safeCmt ($safeCmt . $char)
             }
             :local TabRoteAtual ("rota-de-teste-para-" . $safeCmt)
+            :local linkTag ("," . $safeCmt . ",")
+            :local linkWasDown ($foDownLinks ~ $linkTag)
+
             :local scoreAtual 0
             :local rGw [/ip route get $i gateway]
             :local ifaceName $rGw
@@ -1775,41 +1781,53 @@ function aplicarTemplateMassa(template) {
             }
 
             :local isDis [/ip route get $i disabled]
-            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={
-                :if ($totalRotasAtivas > 1) do={
-                    /ip route set $i disabled=yes
-                    :set totalRotasAtivas ($totalRotasAtivas - 1)
+
+            # SE O LINK FALHOU (score < ScoreMinimoUP)
+            :if ($scoreAtual < $ScoreMinimoUP) do={
+                :set currentDownLinks ($currentDownLinks . $safeCmt . ",")
+                :if ($linkWasDown = false or $isDis = false) do={
+                    :if ($totalRotasAtivas > 1) do={
+                        /ip route set $i disabled=yes
+                        :set totalRotasAtivas ($totalRotasAtivas - 1)
+                        :set foLinkName $cleanName
+                        :set foLinkStatus "DOWN"
+                        :set foPingScore $scoreAtual
+                        :set comentario $cleanName
+                        :set LinkStatus "DOWN"
+                        :set LinkState 0
+                        :do { /system script run FAILOVER_ACTIONS } on-error={}
+                    } else={
+                        /log warning message=("[FAILOVER v7] Link " . $cleanName . " falhou (Score " . [:tostr $scoreAtual] . "/8), mantido ativo por ser o unico restante!")
+                        :set foLinkName $cleanName
+                        :set foLinkStatus "DOWN"
+                        :set foPingScore $scoreAtual
+                        :set comentario $cleanName
+                        :set LinkStatus "DOWN"
+                        :set LinkState 0
+                        :do { /system script run FAILOVER_ACTIONS } on-error={}
+                    }
+                }
+            }
+
+            # SE O LINK RECUPEROU (score >= ScoreMinimoUP)
+            :if ($scoreAtual >= $ScoreMinimoUP) do={
+                :if ($linkWasDown = true or $isDis = true) do={
+                    :if ($isDis = true) do={
+                        /ip route set $i disabled=no
+                        :set totalRotasAtivas ($totalRotasAtivas + 1)
+                    }
                     :set foLinkName $cleanName
-                    :set foLinkStatus "DOWN"
+                    :set foLinkStatus "UP"
                     :set foPingScore $scoreAtual
                     :set comentario $cleanName
-                    :set LinkStatus "DOWN"
-                    :set LinkState 0
-                    :do { /system script run FAILOVER_ACTIONS } on-error={}
-                } else={
-                    /log warning message=("[FAILOVER v7] Link " . $cleanName . " falhou (Score " . [:tostr $scoreAtual] . "/8), mantido ativo por ser o unico restante!")
-                    :set foLinkName $cleanName
-                    :set foLinkStatus "DOWN"
-                    :set foPingScore $scoreAtual
-                    :set comentario $cleanName
-                    :set LinkStatus "DOWN"
-                    :set LinkState 0
+                    :set LinkStatus "UP"
+                    :set LinkState 1
                     :do { /system script run FAILOVER_ACTIONS } on-error={}
                 }
             }
-            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={
-                /ip route set $i disabled=no
-                :set totalRotasAtivas ($totalRotasAtivas + 1)
-                :set foLinkName $cleanName
-                :set foLinkStatus "UP"
-                :set foPingScore $scoreAtual
-                :set comentario $cleanName
-                :set LinkStatus "UP"
-                :set LinkState 1
-                :do { /system script run FAILOVER_ACTIONS } on-error={}
-            }
         }
     }
+    :set foDownLinks $currentDownLinks
 }
 
 # 5. Agendador (a cada 30 segundos)
@@ -1928,6 +1946,9 @@ function aplicarTemplateMassa(template) {
     :global comentario
     :global LinkStatus
     :global LinkState
+    :global foDownLinks
+    :if ([:typeof $foDownLinks] != "str") do={ :set foDownLinks "," }
+    :local currentDownLinks ","
 
     :local totalRotasAtivas 0
     :foreach i in=[/ip route find dst-address=0.0.0.0/0 disabled=no] do={
@@ -1952,6 +1973,8 @@ function aplicarTemplateMassa(template) {
                 :set safeCmt ($safeCmt . $char)
             }
             :local TabRoteAtual ("rota-de-teste-para-" . $safeCmt)
+            :local linkTag ("," . $safeCmt . ",")
+            :local linkWasDown ($foDownLinks ~ $linkTag)
             :local scoreAtual 0
             :local rGw [/ip route get $i gateway]
 
@@ -1964,41 +1987,53 @@ function aplicarTemplateMassa(template) {
             }
 
             :local isDis [/ip route get $i disabled]
-            :if ($scoreAtual < $ScoreMinimoUP and $isDis = false) do={
-                :if ($totalRotasAtivas > 1) do={
-                    /ip route set $i disabled=yes
-                    :set totalRotasAtivas ($totalRotasAtivas - 1)
+
+            # SE O LINK FALHOU (score < ScoreMinimoUP)
+            :if ($scoreAtual < $ScoreMinimoUP) do={
+                :set currentDownLinks ($currentDownLinks . $safeCmt . ",")
+                :if ($linkWasDown = false or $isDis = false) do={
+                    :if ($totalRotasAtivas > 1) do={
+                        /ip route set $i disabled=yes
+                        :set totalRotasAtivas ($totalRotasAtivas - 1)
+                        :set foLinkName $cleanName
+                        :set foLinkStatus "DOWN"
+                        :set foPingScore $scoreAtual
+                        :set comentario $cleanName
+                        :set LinkStatus "DOWN"
+                        :set LinkState 0
+                        :do { /system script run FAILOVER_ACTIONS } on-error={}
+                    } else={
+                        /log warning message=("[FAILOVER v6] Link " . $cleanName . " falhou (Score " . [:tostr $scoreAtual] . "/8), mantido ativo por ser o unico restante!")
+                        :set foLinkName $cleanName
+                        :set foLinkStatus "DOWN"
+                        :set foPingScore $scoreAtual
+                        :set comentario $cleanName
+                        :set LinkStatus "DOWN"
+                        :set LinkState 0
+                        :do { /system script run FAILOVER_ACTIONS } on-error={}
+                    }
+                }
+            }
+
+            # SE O LINK RECUPEROU (score >= ScoreMinimoUP)
+            :if ($scoreAtual >= $ScoreMinimoUP) do={
+                :if ($linkWasDown = true or $isDis = true) do={
+                    :if ($isDis = true) do={
+                        /ip route set $i disabled=no
+                        :set totalRotasAtivas ($totalRotasAtivas + 1)
+                    }
                     :set foLinkName $cleanName
-                    :set foLinkStatus "DOWN"
+                    :set foLinkStatus "UP"
                     :set foPingScore $scoreAtual
                     :set comentario $cleanName
-                    :set LinkStatus "DOWN"
-                    :set LinkState 0
-                    :do { /system script run FAILOVER_ACTIONS } on-error={}
-                } else={
-                    /log warning message=("[FAILOVER v6] Link " . $cleanName . " falhou (Score " . [:tostr $scoreAtual] . "/8), mantido ativo por ser o unico restante!")
-                    :set foLinkName $cleanName
-                    :set foLinkStatus "DOWN"
-                    :set foPingScore $scoreAtual
-                    :set comentario $cleanName
-                    :set LinkStatus "DOWN"
-                    :set LinkState 0
+                    :set LinkStatus "UP"
+                    :set LinkState 1
                     :do { /system script run FAILOVER_ACTIONS } on-error={}
                 }
             }
-            :if ($scoreAtual >= $ScoreMinimoUP and $isDis = true) do={
-                /ip route set $i disabled=no
-                :set totalRotasAtivas ($totalRotasAtivas + 1)
-                :set foLinkName $cleanName
-                :set foLinkStatus "UP"
-                :set foPingScore $scoreAtual
-                :set comentario $cleanName
-                :set LinkStatus "UP"
-                :set LinkState 1
-                :do { /system script run FAILOVER_ACTIONS } on-error={}
-            }
         }
     }
+    :set foDownLinks $currentDownLinks
 }
 
 # 5. Agendador (a cada 30 segundos)
