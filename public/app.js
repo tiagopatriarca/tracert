@@ -2458,6 +2458,8 @@ async function abrirModalBackups(routerId) {
   document.getElementById('modal-router-backups').style.display = 'flex';
 }
 
+let backupPollingInterval = null;
+
 async function carregarListaBackups(routerId) {
   const tbody = document.getElementById('backups-table-tbody');
   tbody.innerHTML = '<tr><td colspan="4" style="padding:15px; text-align:center; color:#64748b;">Carregando backups...</td></tr>';
@@ -2476,7 +2478,7 @@ async function carregarListaBackups(routerId) {
       const tr = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border-color)';
 
-      const dateStr = b.created_at ? new Date(b.created_at + 'Z').toLocaleString('pt-BR') : 'N/A';
+      const dateStr = b.created_at ? new Date(b.created_at.replace(' ', 'T') + 'Z').toLocaleString('pt-BR') : 'N/A';
       const sizeKb = b.file_size ? (b.file_size / 1024).toFixed(1) + ' KB' : 'N/A';
       const safeFilename = escapeHtml(b.filename);
 
@@ -2504,8 +2506,32 @@ async function dispararBackupImediato() {
     const res = await apiFetch(`/api/routers/${currentBackupRouterId}/backup-now`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
-      alert(data.message || 'Comando de backup enfileirado com sucesso!');
-      setTimeout(() => carregarListaBackups(currentBackupRouterId), 3000);
+      const tbody = document.getElementById('backups-table-tbody');
+      const prevRows = tbody.querySelectorAll('tr').length;
+      tbody.innerHTML = `<tr><td colspan="4" style="padding:15px; text-align:center; color:#0284c7; background:#f0f9ff; border-radius:6px;">
+        ⏳ <strong>Backup enfileirado!</strong> Aguardando a RB sincronizar e enviar via FTP (em até 1 minuto)...
+      </td></tr>`;
+
+      let attempts = 0;
+      if (backupPollingInterval) clearInterval(backupPollingInterval);
+      backupPollingInterval = setInterval(async () => {
+        attempts++;
+        try {
+          const checkRes = await apiFetch(`/api/routers/${currentBackupRouterId}/backups`);
+          const currentList = await checkRes.json();
+          if (Array.isArray(currentList) && currentList.length > 0 && (currentList.length > prevRows || attempts >= 15)) {
+            clearInterval(backupPollingInterval);
+            backupPollingInterval = null;
+            carregarListaBackups(currentBackupRouterId);
+          }
+        } catch (e) {
+          if (attempts >= 15) {
+            clearInterval(backupPollingInterval);
+            backupPollingInterval = null;
+            carregarListaBackups(currentBackupRouterId);
+          }
+        }
+      }, 4000);
     } else {
       alert('Erro: ' + (data.error || 'Falha ao solicitar backup'));
     }

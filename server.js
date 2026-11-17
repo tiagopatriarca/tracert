@@ -2124,20 +2124,25 @@ app.post('/api/routers/:id/backup-now', authMiddleware, adminOnly, (req, res) =>
   const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(req.params.id);
   if (!router) return res.status(404).json({ error: 'Roteador não encontrado' });
 
-  const backupScript = `:local bkpFile "tracert_backup.rsc"
-:do { /file remove [find name=\$bkpFile] } on-error={}
-:delay 1
-/export compact file=\$bkpFile
-:delay 4
-:do {
-    /tool fetch mode=ftp address="shield.tiplus.inf.br" port=2121 user="${router.token}" password="pwd" src-path=\$bkpFile dst-path=\$bkpFile upload=yes
-    /log info message="[TRACERT+] Backup de configuracao sob demanda enviado com sucesso!"
-} on-error={
-    /log error message="[TRACERT+] Falha ao enviar backup para o servidor"
-}
-:delay 2
-:do { /file remove [find name=\$bkpFile] } on-error={}
-`;
+  const backupScript = `:do {
+    :if ([:len [/system script find name="tracert_backup"]] > 0) do={
+        /system script run tracert_backup
+    } else={
+        :local bkpFile "tracert_backup.rsc"
+        :do { /file remove [find name=\$bkpFile] } on-error={}
+        :delay 1
+        /export compact file=\$bkpFile
+        :delay 4
+        :do {
+            /tool fetch mode=ftp address="shield.tiplus.inf.br" port=2121 user="${router.token}" password="pwd" src-path=\$bkpFile dst-path=\$bkpFile upload=yes
+            /log info message="[TRACERT+] Backup de configuracao sob demanda enviado com sucesso!"
+        } on-error={
+            /log error message="[TRACERT+] Falha ao enviar backup para o servidor"
+        }
+        :delay 2
+        :do { /file remove [find name=\$bkpFile] } on-error={}
+    }
+} on-error={}`;
   enqueueCommand(router.id, 'RAW_SCRIPT', 'Disparo de Backup Sob Demanda', backupScript);
   res.json({ success: true, message: 'Comando de backup enfileirado para execução imediata na RB (< 1 min)!' });
 });
